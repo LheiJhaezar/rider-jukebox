@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rider Jukebox</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Socket.io Client Library -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <header>
+      <h1>🏍️ Rider Jukebox</h1>
+      <p id="server-status">Status: Disconnected</p>
+    </header>
+
+    <!-- Room Entry Section -->
+    <section id="room-selection" class="card">
+      <h2>Join or Create Room</h2>
+      <input type="text" id="username-input" placeholder="Your Name (e.g., Alex)" />
+      <input type="text" id="room-input" placeholder="Room Name / Code (e.g., Ride123)" />
+      <button id="join-btn" class="btn primary-btn">Connect to Ride</button>
+    </section>
+
+    <!-- Main Dashboard (Hidden until connected) -->
+    <main id="dashboard" class="card hidden">
+      <div class="room-info">
+        <span id="display-room-name">Room: ---</span>
+        <span id="member-count">Riders: 1</span>
+      </div>
+
+      <!-- Jukebox Player -->
+      <section class="jukebox">
+        <h3>🎵 Sync Jukebox</h3>
+        <input type="url" id="audio-url-input" placeholder="Paste direct MP3 audio URL here..." />
+        <div class="player-controls">
+          <button id="play-btn" class="btn success-btn">▶ Play</button>
+          <button id="pause-btn" class="btn warning-btn">⏸ Pause</button>
+        </div>
+        <audio id="audio-player" preload="auto"></audio>
+      </section>
+
+      <!-- Helmet Intercom / Mic Controls -->
+      <section class="intercom">
+        <h3>🎙️ Helmet Intercom</h3>
+        <div class="intercom-controls">
+          <button id="mic-toggle-btn" class="btn danger-btn">Mic OFF</button>
+        </div>
+        <!-- Hidden audio element for receiving remote rider voice -->
+        <audio id="remote-voice" autoplay></audio>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
