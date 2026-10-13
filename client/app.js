@@ -1,6 +1,7 @@
 // Connect to local Node.js server (When deployed to Render, swap this URL to your Render backend URL)
-const socket = io("https://rider-jukebox-backend.onrender.com");
-
+const socket = io("https://rider-jukebox-backend.onrender.com", {
+  transports: ["polling", "websocket"]
+});
 // DOM Elements
 const serverStatus = document.getElementById("server-status");
 const roomSelection = document.getElementById("room-selection");
