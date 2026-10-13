@@ -1,5 +1,5 @@
 // Connect to local Node.js server (When deployed to Render, swap this URL to your Render backend URL)
-const socket = io("http://192.168.10.18:5000");
+const socket = io("https://rider-jukebox-backend.onrender.com");
 
 // DOM Elements
 const serverStatus = document.getElementById("server-status");
