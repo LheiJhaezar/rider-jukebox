@@ -6,7 +6,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // Replace with your actual anon key
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Replace with your actual anon key
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
