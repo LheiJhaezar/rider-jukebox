@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Paste your actual anon key string here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Ensure actual key is pasted here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -465,8 +465,11 @@ const talkBtn = document.getElementById('talk');
 
 const setTalkingState = async (isTalking) => {
   initAudioContext();
+  audioUnlocked = true;
 
-  // Request mic permissions on tap if localStream was not initialized yet
+  const rejoinBtn = document.getElementById("btn-rejoin-audio");
+  if (rejoinBtn) rejoinBtn.style.display = "none";
+
   if (!localStream || !localStream.getAudioTracks()[0]) {
     await initWebRTC();
   }
@@ -492,7 +495,7 @@ if (talkBtn) {
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 }
 
-// 5. ROOM STATE RESTORATION
+// 5. ROOM STATE RESTORATION & AUTOMATIC PLAYBACK FIX
 socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
   switchScreen("s-room");
 
@@ -511,7 +514,9 @@ socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, curre
 
     if (player && player.loadVideoById) {
       player.loadVideoById(track.id, adjustedPosition);
-      if (!audioUnlocked) player.pauseVideo();
+      if (player.playVideo) {
+        player.playVideo();
+      }
     }
   }
 });
@@ -558,7 +563,7 @@ socket.on('room-state-update', (state) => {
   }
 });
 
-// 6. PLAYER CONTROLS
+// 6. PLAYER CONTROLS & AUTOMATIC PLAYBACK
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -605,7 +610,9 @@ socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
 
   if (player && player.loadVideoById) {
     player.loadVideoById(track.id, adjustedTime);
-    if (!audioUnlocked) player.pauseVideo();
+    if (player.playVideo) {
+      player.playVideo();
+    }
   }
 });
 
