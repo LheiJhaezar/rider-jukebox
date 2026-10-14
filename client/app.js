@@ -5,8 +5,8 @@ const socket = io(SERVER_URL, {
   secure: true
 });
 
-const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_URL.supabase.co"; // Replace with your Supabase URL
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // Replace with your Supabase Anon Key
+const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co"; 
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; 
 
 // Initialize client on window object directly to avoid duplicate identifier errors
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
