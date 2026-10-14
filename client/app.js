@@ -19,7 +19,6 @@ let localStream = null;
 let peerConnections = {};
 
 let isHost = false;
-let hostSyncInterval = null;
 let currentTrack = null;
 let audioUnlocked = false;
 
@@ -36,10 +35,26 @@ let toastTimeout = null;
 let activeTalkers = new Map();
 let micTestObj = null;
 
-// ===== VOICE (WebRTC) CONFIG & STATE =====
+// ===== VOICE (WebRTC) CONFIG WITH TURN RELAYS =====
 const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" }
-  // Optional TURN Server can be added here for mobile network traversal
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelay",
+    credential: "openrelay"
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelay",
+    credential: "openrelay"
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelay",
+    credential: "openrelay"
+  }
 ];
 
 const pendingIce = {};
@@ -66,7 +81,7 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. NAVIGATION & LAYOUT CONTROLS
+// 1. NAVIGATION & LAYOUT
 function switchTab(tabId, tabBtn) {
   document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', 'false'));
   if (tabBtn) tabBtn.setAttribute('aria-selected', 'true');
@@ -498,7 +513,6 @@ async function flushIce(remoteId) {
   for (const c of list) { try { await pc.addIceCandidate(c); } catch (e) { console.warn("ICE add failed", e); } }
 }
 
-// Registered ONCE at startup
 socket.on("user-joined-webrtc", ({ socketId, userId }) => {
   callPeer(socketId, userId).catch(e => console.warn("call failed", e));
 });
@@ -652,7 +666,7 @@ function removeQueueItem(index) {
   }
 }
 
-// 8. PLAYER CONTROLS
+// 8. PLAYER CONTROLS & CONTINUOUS HOST TIME BROADCAST
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -682,7 +696,15 @@ setInterval(() => {
       if (barElem) barElem.style.width = (cur / dur * 100) + '%';
     }
   }
-}, 1000);
+
+  // Continuous time sync broadcast by Host
+  if (isHost && currentRoomCode && player && player.getCurrentTime) {
+    const curTime = player.getCurrentTime();
+    if (curTime > 0) {
+      socket.emit('host-time-sync', { roomCode: currentRoomCode, currentTime: curTime });
+    }
+  }
+}, 2000);
 
 socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
   currentTrack = track;
@@ -725,7 +747,9 @@ socket.on('sync-time', ({ currentTime, serverTimestamp }) => {
   if (!isHost && player && player.getCurrentTime) {
     const latencyOffset = (Date.now() - serverTimestamp) / 1000;
     const targetTime = currentTime + latencyOffset;
-    if (Math.abs(player.getCurrentTime() - targetTime) > 1.5) {
+    const localTime = player.getCurrentTime();
+
+    if (Math.abs(localTime - targetTime) > 1.5) {
       player.seekTo(targetTime, true);
     }
   }
