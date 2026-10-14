@@ -124,7 +124,7 @@ function initAudioContext() {
 }
 
 function attachAudioAnalyser(id, stream) {
-  if (!audioCtx) return;
+  if (!audioCtx || !id) return;
   try {
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
