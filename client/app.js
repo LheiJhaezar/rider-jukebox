@@ -18,6 +18,8 @@ let peerConnections = {};
 let isHost = false;
 let hostSyncInterval = null;
 let currentTrack = null;
+let isRideMode = false;
+let wakeLock = null;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
@@ -35,7 +37,49 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. AUTO-FILL ROOM FROM SHARE LINK & AUTH RESTORATION
+// 1. SCREEN WAKE LOCK API (KEEP SCREEN ON WHILE IN RIDE)
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (err) {
+    console.warn("Screen Wake Lock error:", err);
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().then(() => { wakeLock = null; });
+  }
+}
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && currentRoomCode) {
+    await requestWakeLock();
+  }
+});
+
+// 2. RIDE MODE TOGGLE
+function toggleRideMode() {
+  isRideMode = !isRideMode;
+  const btn = document.getElementById("btn-ridemode");
+  const collapsibleSections = document.querySelectorAll(".collapsible-section");
+
+  if (isRideMode) {
+    btn.innerText = "Exit ride mode";
+    btn.style.background = "var(--lamp)";
+    btn.style.color = "var(--lamp-ink)";
+    collapsibleSections.forEach(s => s.style.display = "none");
+  } else {
+    btn.innerText = "Ride mode";
+    btn.style.background = "var(--lane)";
+    btn.style.color = "var(--line)";
+    collapsibleSections.forEach(s => s.style.display = "flex");
+  }
+}
+
+// 3. AUTO-FILL ROOM FROM SHARE LINK & AUTH RESTORATION
 window.addEventListener('DOMContentLoaded', () => {
   const urlParams = new URLSearchParams(window.location.search);
   const roomFromUrl = urlParams.get('room')?.toUpperCase();
@@ -69,7 +113,7 @@ async function logout() {
   await window.supabaseClient.auth.signOut();
 }
 
-// 2. LOBBY & RECONNECT HANDLING
+// 4. LOBBY & RECONNECT HANDLING
 const codeInputs = [...document.querySelectorAll('#code input')];
 codeInputs.forEach((b, i) => {
   b.addEventListener('input', () => {
@@ -107,9 +151,9 @@ function joinSocketRoom(roomCode) {
   document.getElementById("status").innerText = "";
   switchScreen("s-room");
   initWebRTC();
+  requestWakeLock();
 }
 
-// Auto Rejoin on Network Reconnection
 socket.on('connect', () => {
   if (currentRoomCode) {
     document.getElementById("status").innerText = "";
@@ -131,11 +175,12 @@ function copyRoomCode() {
 }
 
 function leaveLobby() {
+  releaseWakeLock();
   if (localStream) localStream.getTracks().forEach(track => track.stop());
   location.href = window.location.origin;
 }
 
-// 3. WEBRTC & PUSH-TO-TALK
+// 5. WEBRTC & PUSH-TO-TALK
 async function initWebRTC() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -220,7 +265,7 @@ const setTalkingState = (isTalking) => {
 ['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
 ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 
-// 4. PLAYER, QUEUE SYNC & TIME CORRECTION
+// 6. PLAYER & QUEUE SYNC
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -237,7 +282,6 @@ function onYouTubeIframeAPIReady() {
   });
 }
 
-// Update progress bar smooth visual interval
 setInterval(() => {
   if (player && player.getCurrentTime && player.getDuration) {
     const cur = player.getCurrentTime();
@@ -253,7 +297,6 @@ setInterval(() => {
 socket.on('room-state-update', (state) => {
   isHost = state.hostId === socket.id;
 
-  // Render connected riders
   document.getElementById('riders').innerHTML = state.riders.map(r => `
     <div class="rider">
       <div class="avatar">${getInitials(r.name)}</div>
@@ -261,7 +304,6 @@ socket.on('room-state-update', (state) => {
     </div>
   `).join('');
 
-  // Handle Skip button state
   const skipBtn = document.getElementById('btn-skip');
   if (state.currentTrack) {
     skipBtn.style.display = 'block';
@@ -270,7 +312,6 @@ socket.on('room-state-update', (state) => {
     skipBtn.style.display = 'none';
   }
 
-  // Render Queue list
   const queueContainer = document.getElementById('queue');
   if (state.queue.length > 0) {
     queueContainer.innerHTML = state.queue.map(t => `
@@ -286,7 +327,6 @@ socket.on('room-state-update', (state) => {
     queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
   }
 
-  // Host playback position broadcast interval (every 4s)
   if (isHost && !hostSyncInterval) {
     hostSyncInterval = setInterval(() => {
       if (player && player.getCurrentTime) {
@@ -337,7 +377,7 @@ function voteSkip() {
   }
 }
 
-// 5. YOUTUBE SEARCH
+// 7. YOUTUBE SEARCH & RATE LIMITING
 async function searchYouTube() {
   const query = document.getElementById("q").value.trim();
   if (!query) return;

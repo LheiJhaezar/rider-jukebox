@@ -67,7 +67,10 @@
         <button class="chip" id="copy" onclick="copyRoomCode()" title="Copy room link">
           <strong id="display-room-code">------</strong> <span>Tap to copy link</span>
         </button>
-        <button class="btn text" onclick="leaveLobby()">Leave</button>
+        <div class="row" style="gap:8px">
+          <button class="btn quiet" id="btn-ridemode" onclick="toggleRideMode()" style="min-height:38px; padding:6px 12px; font-size:13px;">Ride mode</button>
+          <button class="btn text" onclick="leaveLobby()">Leave</button>
+        </div>
       </div>
 
       <div class="riders" id="riders"></div>
@@ -82,7 +85,7 @@
             <div class="title" id="np-title">Queue is empty</div>
             <div class="by" id="np-by">Add the first song below</div>
           </div>
-          <button class="btn quiet" id="btn-skip" onclick="voteSkip()" style="min-height:44px; padding:8px 14px; font-size:13px; display:none;">Skip</button>
+          <button class="btn quiet" id="btn-skip" onclick="voteSkip()" style="min-height:48px; padding:10px 16px; font-size:14px; display:none;">Skip</button>
         </div>
         <div class="lane" aria-hidden="true"><i id="bar"></i></div>
         <div class="times"><span id="t-now">0:00</span><span id="t-len">0:00</span></div>
@@ -93,7 +96,8 @@
         <div class="fine" id="mic-note">Mic is off</div>
       </div>
 
-      <div class="stack">
+      <!-- Non-Ride-Mode Sections (Hidden in Ride Mode) -->
+      <div class="stack collapsible-section">
         <h2>Add a song</h2>
         <form class="search" id="sform" onsubmit="searchYouTube(); return false;">
           <input id="q" type="search" placeholder="Song or artist" autocomplete="off">
@@ -102,7 +106,7 @@
         <div class="list" id="results"><div class="empty">Results appear here.</div></div>
       </div>
 
-      <div class="stack">
+      <div class="stack collapsible-section">
         <h2>Up next</h2>
         <div class="list" id="queue"><div class="empty">Nothing queued.</div></div>
       </div>
