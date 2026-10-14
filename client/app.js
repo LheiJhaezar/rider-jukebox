@@ -1,7 +1,10 @@
 const SERVER_URL = "https://rider-jukebox.onrender.com";
 const socket = io(SERVER_URL, {
   transports: ["polling", "websocket"],
-  secure: true
+  secure: true,
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 15000
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
@@ -22,6 +25,15 @@ let isRideMode = false;
 let wakeLock = null;
 let audioUnlocked = false;
 
+// Web Audio API & Ducking State
+let audioCtx = null;
+let audioAnalysers = {}; // Keyed by userId or 'local'
+let audioAnimFrame = null;
+let targetMusicVolume = 100;
+let baseMusicVolume = 100;
+let isDucked = false;
+let duckTimeout = null;
+
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
   document.getElementById("rejoining-loader").style.display = "none";
@@ -39,7 +51,112 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. URL & LOCALSTORAGE SESSION MANAGEMENT
+// 1. WEB AUDIO API & VOLUME-REACTIVITY
+function initAudioContext() {
+  if (!audioCtx) {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AudioContext();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function attachAudioAnalyser(id, stream) {
+  if (!audioCtx) return;
+  try {
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.5;
+    source.connect(analyser);
+
+    audioAnalysers[id] = {
+      analyser,
+      dataArray: new Uint8Array(analyser.frequencyBinCount)
+    };
+
+    if (!audioAnimFrame) {
+      processAudioVolumes();
+    }
+  } catch (err) {
+    console.warn("Error attaching audio analyser:", err);
+  }
+}
+
+function removeAudioAnalyser(id) {
+  delete audioAnalysers[id];
+}
+
+function processAudioVolumes() {
+  let anyRiderTalking = false;
+  const TALKING_THRESHOLD = 25; // Filters out ambient wind/road noise
+
+  Object.entries(audioAnalysers).forEach(([id, obj]) => {
+    obj.analyser.getByteFrequencyData(obj.dataArray);
+    let sum = 0;
+    for (let i = 0; i < obj.dataArray.length; i++) {
+      sum += obj.dataArray[i];
+    }
+    const average = sum / obj.dataArray.length;
+
+    const riderElem = document.querySelector(`[data-user-id="${id}"]`);
+    if (riderElem) {
+      const avatarElem = riderElem.querySelector('.avatar');
+      if (average > TALKING_THRESHOLD) {
+        anyRiderTalking = true;
+        const scale = 1 + Math.min(average / 150, 0.25);
+        if (avatarElem) {
+          avatarElem.style.borderColor = "var(--live)";
+          avatarElem.style.boxShadow = `0 0 0 ${4 * scale}px rgba(127,224,161,0.35)`;
+        }
+      } else {
+        if (avatarElem) {
+          avatarElem.style.borderColor = "var(--edge)";
+          avatarElem.style.boxShadow = "none";
+        }
+      }
+    }
+  });
+
+  // Smooth Music Ducking Handling
+  const enableDucking = document.getElementById("chk-ducking")?.checked;
+  if (enableDucking) {
+    if (anyRiderTalking) {
+      if (duckTimeout) clearTimeout(duckTimeout);
+      duckTimeout = null;
+      if (!isDucked) {
+        isDucked = true;
+        if (player && player.getVolume) baseMusicVolume = player.getVolume() || 100;
+        targetMusicVolume = Math.round(baseMusicVolume * 0.25);
+        smoothSetVolume(targetMusicVolume);
+      }
+    } else if (isDucked && !duckTimeout) {
+      duckTimeout = setTimeout(() => {
+        isDucked = false;
+        targetMusicVolume = baseMusicVolume;
+        smoothSetVolume(targetMusicVolume);
+        duckTimeout = null;
+      }, 500);
+    }
+  }
+
+  audioAnimFrame = requestAnimationFrame(processAudioVolumes);
+}
+
+function smoothSetVolume(target) {
+  if (!player || !player.getVolume || !player.setVolume) return;
+  const current = player.getVolume();
+  if (Math.abs(current - target) <= 2) {
+    player.setVolume(target);
+    return;
+  }
+  const step = current < target ? 2 : -2;
+  player.setVolume(current + step);
+  setTimeout(() => smoothSetVolume(target), 20);
+}
+
+// 2. SESSION & AUTH
 function getSavedRoomCode() {
   const urlParams = new URLSearchParams(window.location.search);
   const roomFromUrl = urlParams.get('room')?.toUpperCase();
@@ -57,7 +174,6 @@ function clearRoomSession() {
   history.replaceState(null, '', '/');
 }
 
-// 2. AUTHENTICATION RESTORATION
 window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (session) {
     currentUser = session.user;
@@ -92,7 +208,7 @@ async function logout() {
   await window.supabaseClient.auth.signOut();
 }
 
-// 3. LOBBY & CODE BOXES
+// 3. LOBBY & RECONNECT
 const codeInputs = [...document.querySelectorAll('#code input')];
 codeInputs.forEach((b, i) => {
   b.addEventListener('input', () => {
@@ -133,7 +249,6 @@ function joinSocketRoom(roomCode) {
   document.getElementById("btn-rejoin-audio").style.display = audioUnlocked ? "none" : "block";
 }
 
-// Socket Connection Status Listeners
 socket.on('connect', () => {
   const statusElem = document.getElementById("status");
   statusElem.innerText = "Connected";
@@ -174,14 +289,17 @@ function copyRoomCode() {
 
 function leaveLobby() {
   clearRoomSession();
+  if (audioAnimFrame) cancelAnimationFrame(audioAnimFrame);
   if (localStream) localStream.getTracks().forEach(track => track.stop());
   location.href = window.location.origin;
 }
 
-// 4. USER GESTURE AUDIO UNLOCK & WEBRTC
+// 4. USER GESTURE UNLOCK & WEBRTC
 async function rejoinAudioAndMedia() {
   audioUnlocked = true;
   document.getElementById("btn-rejoin-audio").style.display = "none";
+
+  initAudioContext();
 
   if (player && player.playVideo && currentTrack) {
     player.playVideo();
@@ -195,13 +313,17 @@ async function initWebRTC() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     localStream.getAudioTracks()[0].enabled = false;
+
+    if (currentUser) {
+      attachAudioAnalyser(currentUser.id, localStream);
+    }
   } catch (err) {
     console.warn("Microphone unavailable:", err);
   }
 
-  socket.on("user-joined-webrtc", ({ socketId }) => createPeerConnection(socketId, true));
+  socket.on("user-joined-webrtc", ({ socketId, userId }) => createPeerConnection(socketId, userId, true));
   socket.on("webrtc-offer", async ({ senderId, offer }) => {
-    const pc = createPeerConnection(senderId, false);
+    const pc = createPeerConnection(senderId, senderId, false);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -222,12 +344,13 @@ async function initWebRTC() {
       peerConnections[socketId].close();
       delete peerConnections[socketId];
     }
+    removeAudioAnalyser(socketId);
     const elem = document.getElementById(`audio-${socketId}`);
     if (elem) elem.remove();
   });
 }
 
-function createPeerConnection(targetSocketId, isInitiator) {
+function createPeerConnection(targetSocketId, userId, isInitiator) {
   const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
   peerConnections[targetSocketId] = pc;
 
@@ -250,6 +373,7 @@ function createPeerConnection(targetSocketId, isInitiator) {
       document.getElementById("audio-streams").appendChild(remoteAudio);
     }
     remoteAudio.srcObject = event.streams[0];
+    attachAudioAnalyser(userId, event.streams[0]);
   };
 
   if (isInitiator) {
@@ -275,7 +399,7 @@ const setTalkingState = (isTalking) => {
 ['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
 ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 
-// 5. FULL ROOM STATE RESTORATION & SYNC
+// 5. ROOM STATE RESTORATION
 socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
   switchScreen("s-room");
 
@@ -300,7 +424,7 @@ socket.on('room-state-update', (state) => {
   isHost = state.hostUserId === (currentUser ? currentUser.id : null);
 
   document.getElementById('riders').innerHTML = state.riders.map(r => `
-    <div class="rider" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
+    <div class="rider" data-user-id="${r.userId}" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
       <div class="avatar">${getInitials(r.name)}</div>
       ${r.name.split(" ")[0]}
       <span style="font-size:10px; color:var(--dim);">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : '')}</span>
@@ -403,7 +527,7 @@ function voteSkip() {
   }
 }
 
-// 7. YOUTUBE SEARCH
+// 7. SEARCH & RIDE MODE
 async function searchYouTube() {
   const query = document.getElementById("q").value.trim();
   if (!query) return;
