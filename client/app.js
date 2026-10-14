@@ -7,14 +7,16 @@ const socket = io(SERVER_URL, {
 
 const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_URL.supabase.co"; // Replace with your Supabase URL
 const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // Replace with your Supabase Anon Key
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Initialize client on window object directly to avoid duplicate identifier errors
+window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentUser = null;
 let currentRoomCode = null;
 let player = null;
 
 // 2. AUTH STATE LISTENER (PERSIST LOG IN ON RELOAD)
-supabase.auth.onAuthStateChange((event, session) => {
+window.supabaseClient.auth.onAuthStateChange((event, session) => {
   if (session) {
     currentUser = session.user;
     const name = currentUser.user_metadata.full_name || currentUser.email;
@@ -31,7 +33,7 @@ supabase.auth.onAuthStateChange((event, session) => {
 });
 
 async function loginWithGoogle() {
-  await supabase.auth.signInWithOAuth({
+  await window.supabaseClient.auth.signInWithOAuth({
     provider: 'google',
     options: {
       redirectTo: window.location.origin
@@ -40,7 +42,7 @@ async function loginWithGoogle() {
 }
 
 async function logout() {
-  await supabase.auth.signOut();
+  await window.supabaseClient.auth.signOut();
 }
 
 // 3. LOBBY CREATION & JOINING
@@ -57,7 +59,7 @@ function joinLobby() {
 
 function joinSocketRoom(roomCode, isHost) {
   currentRoomCode = roomCode;
-  const userName = currentUser.user_metadata.full_name || currentUser.email;
+  const userName = currentUser ? (currentUser.user_metadata.full_name || currentUser.email) : "Rider";
 
   socket.emit("join-room", { roomCode, userName, isHost });
 
