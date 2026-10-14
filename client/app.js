@@ -300,8 +300,11 @@ function joinSocketRoom(roomCode) {
 
   socket.emit("join-room", { roomCode, userId, userName });
 
-  document.getElementById("display-room-code").innerText = roomCode;
-  document.getElementById("btn-rejoin-audio").style.display = audioUnlocked ? "none" : "block";
+  const displayElem = document.getElementById("display-room-code");
+  if (displayElem) displayElem.innerText = roomCode;
+
+  const rejoinBtn = document.getElementById("btn-rejoin-audio");
+  if (rejoinBtn) rejoinBtn.style.display = audioUnlocked ? "none" : "block";
 }
 
 socket.on('connect', () => {
