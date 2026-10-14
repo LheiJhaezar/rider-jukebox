@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Ensure actual key is pasted here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Ensure your actual anon key is placed here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -21,10 +21,9 @@ let peerConnections = {};
 let isHost = false;
 let hostSyncInterval = null;
 let currentTrack = null;
-let isRideMode = false;
-let wakeLock = null;
 let audioUnlocked = false;
 
+// Web Audio API & Ducking
 let audioCtx = null;
 let audioAnalysers = {};
 let audioAnimFrame = null;
@@ -32,12 +31,17 @@ let targetMusicVolume = 100;
 let baseMusicVolume = 100;
 let isDucked = false;
 let duckTimeout = null;
-let bannerTimeout = null;
+let toastTimeout = null;
+
+// Local Talking State Tracking
+let activeTalkers = new Map(); // Keyed by userId -> userName
+let isLocalTalker = false;
+
+// Mic Check Test State
+let micTestObj = null;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
-  const loader = document.getElementById("rejoining-loader");
-  if (loader) loader.style.display = "none";
   if (screenId) {
     const target = document.getElementById(screenId);
     if (target) target.classList.add('on');
@@ -55,7 +59,38 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. WEB AUDIO API CHIME & AUDIO PROCESSING
+// 1. NAVIGATION & LAYOUT CONTROLS
+function switchTab(tabId, tabBtn) {
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', 'false'));
+  if (tabBtn) tabBtn.setAttribute('aria-selected', 'true');
+
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('on'));
+  const pane = document.getElementById(tabId);
+  if (pane) pane.classList.add('on');
+
+  const tabsContainer = document.querySelector('.tabs');
+  if (tabsContainer) tabsContainer.scrollTop = 0;
+}
+
+function toggleMiniPlayer() {
+  const stage = document.getElementById('stage');
+  const btn = document.getElementById('shrink');
+  if (!stage) return;
+
+  const isMini = stage.classList.toggle('mini');
+  if (btn) btn.textContent = isMini ? 'Expand video' : 'Shrink video';
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.innerHeight < 700) {
+    const stage = document.getElementById('stage');
+    const btn = document.getElementById('shrink');
+    if (stage) stage.classList.add('mini');
+    if (btn) btn.textContent = 'Expand video';
+  }
+});
+
+// 2. WEB AUDIO & TALKING CUES
 function initAudioContext() {
   if (!audioCtx) {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -65,63 +100,6 @@ function initAudioContext() {
     audioCtx.resume();
   }
 }
-
-function playSynthesizedChime() {
-  if (!audioCtx) return;
-
-  const now = audioCtx.currentTime;
-  const osc1 = audioCtx.createOscillator();
-  const osc2 = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-
-  osc1.type = 'sine';
-  osc2.type = 'sine';
-
-  osc1.frequency.setValueAtTime(660, now);
-  osc2.frequency.setValueAtTime(880, now + 0.15);
-
-  gain.gain.setValueAtTime(0.3, now);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-
-  osc1.connect(gain);
-  osc2.connect(gain);
-  gain.connect(audioCtx.destination);
-
-  osc1.start(now);
-  osc1.stop(now + 0.15);
-  osc2.start(now + 0.15);
-  osc2.stop(now + 0.4);
-}
-
-function sendSignal(type) {
-  if (!currentRoomCode) return;
-  socket.emit('send-quick-signal', { roomCode: currentRoomCode, signalType: type });
-}
-
-socket.on('receive-quick-signal', ({ senderName, signalType }) => {
-  const banner = document.getElementById('signal-banner');
-  const bannerText = document.getElementById('signal-text');
-
-  if (bannerText && banner) {
-    bannerText.innerText = `${senderName.split(" ")[0]}: ${signalType}`;
-    banner.style.display = 'block';
-  }
-
-  playSynthesizedChime();
-
-  if (player && player.setVolume && player.getVolume) {
-    baseMusicVolume = player.getVolume() || 100;
-    player.setVolume(Math.round(baseMusicVolume * 0.2));
-    setTimeout(() => {
-      if (!isDucked) player.setVolume(baseMusicVolume);
-    }, 2000);
-  }
-
-  if (bannerTimeout) clearTimeout(bannerTimeout);
-  bannerTimeout = setTimeout(() => {
-    if (banner) banner.style.display = 'none';
-  }, 5000);
-});
 
 function attachAudioAnalyser(id, stream) {
   if (!audioCtx) return;
@@ -162,24 +140,33 @@ function processAudioVolumes() {
     const average = sum / obj.dataArray.length;
 
     const riderElem = document.querySelector(`[data-user-id="${id}"]`);
-    if (riderElem) {
-      const avatarElem = riderElem.querySelector('.avatar');
-      if (average > TALKING_THRESHOLD) {
-        anyRiderTalking = true;
-        const scale = 1 + Math.min(average / 150, 0.25);
-        if (avatarElem) {
-          avatarElem.style.borderColor = "var(--live)";
-          avatarElem.style.boxShadow = `0 0 0 ${4 * scale}px rgba(127,224,161,0.35)`;
-        }
-      } else {
-        if (avatarElem) {
-          avatarElem.style.borderColor = "var(--edge)";
-          avatarElem.style.boxShadow = "none";
-        }
-      }
+    const riderName = riderElem?.getAttribute('data-user-name') || "Rider";
+
+    if (average > TALKING_THRESHOLD) {
+      anyRiderTalking = true;
+      activeTalkers.set(id, riderName.split(" ")[0]);
+      if (riderElem) riderElem.classList.add('talking');
+    } else {
+      activeTalkers.delete(id);
+      if (riderElem) riderElem.classList.remove('talking');
     }
   });
 
+  // Update Talk Bar Text & Cues
+  const talkBar = document.getElementById('talkbar');
+  const talkText = document.getElementById('talktext');
+  if (talkBar && talkText) {
+    const names = Array.from(activeTalkers.values());
+    if (names.length > 0) {
+      talkBar.classList.add('on');
+      talkText.textContent = names.join(' and ') + ' talking';
+    } else {
+      talkBar.classList.remove('on');
+      talkText.textContent = 'Nobody is talking';
+    }
+  }
+
+  // Smooth Music Ducking
   const enableDucking = document.getElementById("chk-ducking")?.checked;
   if (enableDucking) {
     if (anyRiderTalking) {
@@ -216,7 +203,60 @@ function smoothSetVolume(target) {
   setTimeout(() => smoothSetVolume(target), 20);
 }
 
-// 2. SESSION & AUTH
+// 3. QUICK SIGNALS & SYNTHESIZED CHIME
+function playSynthesizedChime() {
+  if (!audioCtx) return;
+
+  const now = audioCtx.currentTime;
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc1.type = 'sine';
+  osc2.type = 'sine';
+
+  osc1.frequency.setValueAtTime(660, now);
+  osc2.frequency.setValueAtTime(880, now + 0.15);
+
+  gain.gain.setValueAtTime(0.3, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+
+  osc1.connect(gain);
+  osc2.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc1.start(now);
+  osc1.stop(now + 0.15);
+  osc2.start(now + 0.15);
+  osc2.stop(now + 0.4);
+}
+
+function sendSignal(type) {
+  if (!currentRoomCode) return;
+  socket.emit('send-quick-signal', { roomCode: currentRoomCode, signalType: type });
+}
+
+socket.on('receive-quick-signal', ({ senderName, signalType }) => {
+  const toast = document.getElementById('toast');
+  if (toast) {
+    toast.textContent = `${senderName.split(" ")[0]}: ${signalType}`;
+    toast.classList.add('on');
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => toast.classList.remove('on'), 4000);
+  }
+
+  playSynthesizedChime();
+
+  if (player && player.setVolume && player.getVolume) {
+    baseMusicVolume = player.getVolume() || 100;
+    player.setVolume(Math.round(baseMusicVolume * 0.2));
+    setTimeout(() => {
+      if (!isDucked) player.setVolume(baseMusicVolume);
+    }, 2000);
+  }
+});
+
+// 4. SESSION RESTORATION & AUTH
 function getSavedRoomCode() {
   const urlParams = new URLSearchParams(window.location.search);
   const roomFromUrl = urlParams.get('room')?.toUpperCase();
@@ -245,9 +285,6 @@ window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
 
     const savedRoom = getSavedRoomCode();
     if (savedRoom) {
-      document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
-      const loader = document.getElementById("rejoining-loader");
-      if (loader) loader.style.display = "block";
       joinSocketRoom(savedRoom);
     } else {
       switchScreen("s-lobby");
@@ -271,7 +308,7 @@ async function logout() {
   await window.supabaseClient.auth.signOut();
 }
 
-// 3. LOBBY & RECONNECT
+// 5. LOBBY & RECONNECT
 const codeInputs = [...document.querySelectorAll('#code input')];
 codeInputs.forEach((b, i) => {
   b.addEventListener('input', () => {
@@ -353,10 +390,10 @@ function copyRoomCode() {
   if (!currentRoomCode) return;
   const shareUrl = `${window.location.origin}/?room=${currentRoomCode}`;
   navigator.clipboard?.writeText(shareUrl);
-  const span = document.querySelector('#copy span');
-  if (span) {
-    span.textContent = 'Link copied';
-    setTimeout(() => span.textContent = 'Tap to copy link', 1500);
+  const chipSpan = document.querySelector('#copy span');
+  if (chipSpan) {
+    chipSpan.textContent = 'Copied';
+    setTimeout(() => chipSpan.textContent = 'Copy link', 1500);
   }
 }
 
@@ -367,7 +404,7 @@ function leaveLobby() {
   location.href = window.location.origin;
 }
 
-// 4. WEBRTC & PUSH-TO-TALK
+// 6. WEBRTC & PUSH-TO-TALK
 async function rejoinAudioAndMedia() {
   audioUnlocked = true;
   const rejoinBtn = document.getElementById("btn-rejoin-audio");
@@ -380,7 +417,6 @@ async function rejoinAudioAndMedia() {
   }
 
   await initWebRTC();
-  requestWakeLock();
 }
 
 async function initWebRTC() {
@@ -483,11 +519,6 @@ const setTalkingState = async (isTalking) => {
     talkBtn.setAttribute('aria-pressed', isTalking);
     talkBtn.textContent = isTalking ? 'Talking' : 'Hold to talk';
   }
-
-  const micNote = document.getElementById('mic-note');
-  if (micNote) {
-    micNote.textContent = isTalking ? 'Everyone can hear you' : 'Mic is off';
-  }
 };
 
 if (talkBtn) {
@@ -495,7 +526,7 @@ if (talkBtn) {
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 }
 
-// 5. ROOM STATE RESTORATION & AUTOMATIC PLAYBACK FIX
+// 7. ROOM STATE RESTORATION
 socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
   switchScreen("s-room");
 
@@ -514,9 +545,7 @@ socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, curre
 
     if (player && player.loadVideoById) {
       player.loadVideoById(track.id, adjustedPosition);
-      if (player.playVideo) {
-        player.playVideo();
-      }
+      if (player.playVideo) player.playVideo();
     }
   }
 });
@@ -527,43 +556,60 @@ socket.on('room-state-update', (state) => {
   const ridersContainer = document.getElementById('riders');
   if (ridersContainer) {
     ridersContainer.innerHTML = state.riders.map(r => `
-      <div class="rider" data-user-id="${r.userId}" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
+      <div class="rider" data-user-id="${r.userId}" data-user-name="${r.name}" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
         <div class="avatar">${getInitials(r.name)}</div>
-        ${r.name.split(" ")[0]}
-        <span style="font-size:10px; color:var(--dim);">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : '')}</span>
+        <span class="rname">${r.name.split(" ")[0]}</span>
+        <span class="bars"><b></b><b></b><b></b></span>
       </div>
     `).join('');
   }
 
-  const skipBtn = document.getElementById('btn-skip');
+  const skipBtn = document.getElementById('skip');
   if (skipBtn) {
     if (state.currentTrack) {
-      skipBtn.style.display = 'block';
-      skipBtn.innerText = isHost ? 'Skip (Host)' : `Skip (${state.skipVotes}/${state.votesNeeded})`;
+      skipBtn.style.display = 'inline-flex';
+      skipBtn.innerText = isHost ? 'Skip (Host)' : `Vote skip ${state.skipVotes}/${state.votesNeeded}`;
     } else {
       skipBtn.style.display = 'none';
     }
   }
 
-  const queueContainer = document.getElementById('queue');
-  if (queueContainer) {
-    if (state.queue.length > 0) {
-      queueContainer.innerHTML = state.queue.map(t => `
-        <div class="item">
-          <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
-          <div class="meta">
-            <div class="t">${t.title}</div>
-            <div class="s">${t.channel} — added by ${t.addedBy}</div>
-          </div>
-        </div>
-      `).join('');
-    } else {
-      queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
-    }
-  }
+  renderQueue(state.queue);
 });
 
-// 6. PLAYER CONTROLS & AUTOMATIC PLAYBACK
+function renderQueue(queue) {
+  const container = document.getElementById('queue');
+  const qn = document.getElementById('qn');
+  const qcount = document.getElementById('qcount');
+
+  if (qn) qn.textContent = queue.length;
+  if (qcount) qcount.textContent = queue.length ? queue.length + ' songs' : '';
+
+  if (!container) return;
+
+  if (queue.length > 0) {
+    container.innerHTML = queue.map((t, i) => `
+      <div class="item">
+        <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
+        <div class="m">
+          <div class="t">${t.title}</div>
+          <div class="s">${t.channel} · added by ${t.addedBy}</div>
+        </div>
+        ${(isHost || (currentUser && t.addedBy === currentUser.user_metadata?.full_name)) ? `<button class="sm" onclick="removeQueueItem(${i})">Remove</button>` : ''}
+      </div>
+    `).join('');
+  } else {
+    container.innerHTML = '<div class="empty">Nothing queued. Open Search to add a song.</div>';
+  }
+}
+
+function removeQueueItem(index) {
+  if (currentRoomCode) {
+    socket.emit('remove-queue-item', { roomCode: currentRoomCode, index });
+  }
+}
+
+// 8. PLAYER CONTROLS
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -610,9 +656,7 @@ socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
 
   if (player && player.loadVideoById) {
     player.loadVideoById(track.id, adjustedTime);
-    if (player.playVideo) {
-      player.playVideo();
-    }
+    if (player.playVideo) player.playVideo();
   }
 });
 
@@ -624,8 +668,8 @@ socket.on('queue-empty', () => {
   const nowElem = document.getElementById("t-now");
   const lenElem = document.getElementById("t-len");
 
-  if (titleElem) titleElem.innerText = "Queue is empty";
-  if (byElem) byElem.innerText = "Add the first song below";
+  if (titleElem) titleElem.innerText = "Nothing playing";
+  if (byElem) byElem.innerText = "Add a song from Search";
   if (barElem) barElem.style.width = '0%';
   if (nowElem) nowElem.innerText = "0:00";
   if (lenElem) lenElem.innerText = "0:00";
@@ -650,10 +694,42 @@ function voteSkip() {
   }
 }
 
-// 7. SEARCH & RIDE MODE
+// 9. CLEARABLE SEARCH
+function syncSearchClear() {
+  const q = document.getElementById("q");
+  const clr = document.getElementById("clr");
+  if (clr && q) {
+    clr.classList.toggle("on", !!q.value);
+  }
+}
+
+function clearSearch() {
+  const q = document.getElementById("q");
+  const resultsContainer = document.getElementById("results");
+  const rhead = document.getElementById("rhead");
+
+  if (q) q.value = '';
+  if (resultsContainer) resultsContainer.innerHTML = '<div class="empty">Search for a song to add it to the queue.</div>';
+  if (rhead) rhead.hidden = true;
+
+  syncSearchClear();
+  if (q) q.focus();
+}
+
+const searchInput = document.getElementById("q");
+if (searchInput) {
+  searchInput.addEventListener('input', syncSearchClear);
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') clearSearch();
+  });
+}
+
 async function searchYouTube() {
-  const query = document.getElementById("q").value.trim();
+  const q = document.getElementById("q");
+  const query = q?.value.trim();
   if (!query) return;
+
+  q.blur();
 
   try {
     const response = await fetch(`${SERVER_URL}/api/search-youtube?q=${encodeURIComponent(query)}`);
@@ -662,7 +738,11 @@ async function searchYouTube() {
     if (data.error) return alert(data.error);
 
     const resultsContainer = document.getElementById("results");
+    const rhead = document.getElementById("rhead");
+
+    if (rhead) rhead.hidden = false;
     if (!resultsContainer) return;
+
     resultsContainer.innerHTML = "";
 
     data.forEach(video => {
@@ -670,16 +750,21 @@ async function searchYouTube() {
       item.className = "item";
       item.innerHTML = `
         <div class="thumb" style="background-image: url('${video.snippet.thumbnails.default.url}')"></div>
-        <div class="meta">
+        <div class="m">
           <div class="t">${video.snippet.title}</div>
           <div class="s">${video.snippet.channelTitle}</div>
         </div>
-        <button class="add" onclick="addToQueue('${video.id.videoId}', '${video.snippet.title.replace(/'/g, "\\'")}', '${video.snippet.channelTitle.replace(/'/g, "\\'")}', this)">Add</button>
+        <button class="sm add" onclick="addToQueue('${video.id.videoId}', '${video.snippet.title.replace(/'/g, "\\'")}', '${video.snippet.channelTitle.replace(/'/g, "\\'")}', this)">Add</button>
       `;
       resultsContainer.appendChild(item);
     });
+
+    syncSearchClear();
   } catch (err) {
-    alert("Error fetching YouTube search results.");
+    const resultsContainer = document.getElementById("results");
+    if (resultsContainer) {
+      resultsContainer.innerHTML = '<div class="empty">Search is unavailable right now. Try again later.</div>';
+    }
   }
 }
 
@@ -691,34 +776,95 @@ function addToQueue(videoId, videoTitle, channelTitle, btn) {
   socket.emit("add-to-queue", { roomCode: currentRoomCode, videoId, videoTitle, channelTitle });
 }
 
-function toggleRideMode() {
-  isRideMode = !isRideMode;
-  const btn = document.getElementById("btn-ridemode");
-  const collapsibleSections = document.querySelectorAll(".collapsible-section");
+// 10. REAL MIC CHECK DIAGNOSTICS
+async function toggleMicTest() {
+  const btn = document.getElementById("mtest");
+  const st = document.getElementById("mstat");
+  const dev = document.getElementById("mdev");
+  const lvl = document.getElementById("lvl");
 
-  if (isRideMode) {
-    if (btn) {
-      btn.innerText = "Exit ride mode";
-      btn.style.background = "var(--lamp)";
-      btn.style.color = "var(--lamp-ink)";
+  if (micTestObj) {
+    stopMicTest();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    let peak = 0;
+
+    micTestObj = { stream, ctx, raf: 0, timer: null };
+
+    if (btn) btn.textContent = 'Stop mic test';
+    if (dev) dev.textContent = 'Using: ' + (stream.getAudioTracks()[0].label || 'default microphone');
+    if (st) {
+      st.className = 'status';
+      st.textContent = 'Listening. Say something.';
     }
-    collapsibleSections.forEach(s => s.style.display = "none");
-  } else {
-    if (btn) {
-      btn.innerText = "Ride mode";
-      btn.style.background = "var(--lane)";
-      btn.style.color = "var(--line)";
+
+    function loop() {
+      analyser.getByteTimeDomainData(buf);
+      let max = 0;
+      for (const v of buf) {
+        max = Math.max(max, Math.abs(v - 128));
+      }
+      const level = max / 128;
+      peak = Math.max(peak, level);
+
+      if (lvl) lvl.style.width = Math.min(100, level * 220) + '%';
+
+      if (peak > 0.06 && st) {
+        st.className = 'status ok';
+        st.textContent = 'Mic is working. We can hear you.';
+      }
+
+      if (micTestObj) micTestObj.raf = requestAnimationFrame(loop);
     }
-    collapsibleSections.forEach(s => s.style.display = "flex");
+
+    loop();
+
+    micTestObj.timer = setTimeout(() => {
+      if (peak <= 0.06 && st) {
+        st.className = 'status bad';
+        st.textContent = 'We heard nothing. Check the mute switch on your headset or choose another mic in your phone settings.';
+      }
+      stopMicTest(true);
+    }, 12000);
+
+  } catch (err) {
+    if (st) {
+      st.className = 'status bad';
+      st.textContent = err.name === 'NotAllowedError'
+        ? 'Mic is blocked. Allow microphone for this site in your browser settings, then try again.'
+        : 'No microphone found. Connect a headset or check your Bluetooth device.';
+    }
   }
 }
 
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator && !wakeLock) {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch (err) {
-    console.warn("Screen Wake Lock error:", err);
+function stopMicTest(keepStatusMessage) {
+  if (!micTestObj) return;
+
+  cancelAnimationFrame(micTestObj.raf);
+  clearTimeout(micTestObj.timer);
+
+  micTestObj.stream.getTracks().forEach(t => t.stop());
+  micTestObj.ctx.close();
+  micTestObj = null;
+
+  const lvl = document.getElementById("lvl");
+  const btn = document.getElementById("mtest");
+  const st = document.getElementById("mstat");
+
+  if (lvl) lvl.style.width = '0%';
+  if (btn) btn.textContent = 'Start mic test';
+  if (!keepStatusMessage && st) {
+    st.className = 'status';
+    st.textContent = 'Test stopped.';
   }
 }

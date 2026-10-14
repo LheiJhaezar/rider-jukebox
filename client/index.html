@@ -14,139 +14,145 @@
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
+  <div id="toast" role="status"></div>
   <div class="app">
-    <!-- Top Signal Banner Overlay -->
-    <div id="signal-banner" class="panel" style="display:none; position:sticky; top:10px; z-index:100; background:var(--lamp); color:var(--lamp-ink); font-weight:800; font-family:var(--display); font-size:20px; text-align:center; padding:14px; border:0; box-shadow:0 8px 24px rgba(0,0,0,0.5);">
-      <span id="signal-text">Signal message</span>
-    </div>
 
-    <div class="brand">Rider Jukebox <small id="status"></small></div>
-
-    <div id="rejoining-loader" class="panel stack" style="display:none; text-align:center; margin-top:20vh;">
-      <h2>Rejoining ride</h2>
-      <p class="fine">Restoring session and room state...</p>
-    </div>
-
-    <!-- 1. Sign in Screen -->
+    <!-- SIGN IN -->
     <section class="screen on" id="s-login">
-      <div class="hero">
-        <h1>One playlist.<br>Every bike.</h1>
-        <p class="lead">Sign in to play the same song at the same time and talk to your group while you ride.</p>
-        <div class="actions stack">
+      <div class="page">
+        <div class="brand">Rider Jukebox</div>
+        <div style="margin-top:9vh;display:flex;flex-direction:column;gap:18px">
+          <h1>One playlist.<br>Every bike.</h1>
+          <p class="lead">Sign in to play the same song at the same time and talk to your group while you ride.</p>
           <button class="btn primary" onclick="loginWithGoogle()">Continue with Google</button>
           <p class="fine">We only use your name and photo so riders know who is who.</p>
         </div>
       </div>
     </section>
 
-    <!-- 2. Lobby Screen -->
+    <!-- LOBBY -->
     <section class="screen" id="s-lobby">
-      <div class="row">
-        <div class="who">
-          <div class="avatar" id="user-avatar">--</div>
-          <div>
-            <div style="font-weight:600" id="user-display-name">Loading...</div>
-            <div class="fine">Signed in</div>
+      <div class="page">
+        <div class="brand">Rider Jukebox <small id="status"></small></div>
+        <div class="row">
+          <div class="row" style="justify-content:flex-start">
+            <div class="avatar" id="user-avatar">--</div>
+            <div>
+              <div style="font-weight:600" id="user-display-name">Loading...</div>
+              <div class="fine">Signed in</div>
+            </div>
           </div>
+          <button class="btn text" onclick="logout()">Log out</button>
         </div>
-        <button class="btn text" onclick="logout()">Log out</button>
-      </div>
 
-      <div id="lobby-error-msg" class="fine" style="color:var(--lamp); display:none; margin-top:12px;"></div>
+        <div id="lobby-error-msg" class="fine" style="color:var(--warn); display:none;"></div>
 
-      <div class="stack" style="margin-top:4vh">
-        <h2>Start a ride</h2>
+        <h2 style="margin-top:2vh">Start a ride</h2>
         <p class="lead">Create a lobby and share the code with your group.</p>
         <button class="btn primary" onclick="createLobby()">Create new lobby</button>
-      </div>
-      <div class="or">or join one</div>
-      <div class="panel stack">
-        <label class="fine" for="c0">Room code</label>
-        <div class="code" id="code" aria-label="Six character room code">
-          <input id="c0" maxlength="1" autocomplete="off">
-          <input maxlength="1" autocomplete="off">
-          <input maxlength="1" autocomplete="off">
-          <input maxlength="1" autocomplete="off">
-          <input maxlength="1" autocomplete="off">
-          <input maxlength="1" autocomplete="off">
+
+        <div class="or">or join one</div>
+
+        <div class="panelbox">
+          <label class="fine" for="c0">Room code</label>
+          <div class="code" id="code">
+            <input id="c0" maxlength="1" autocomplete="off"><input maxlength="1" autocomplete="off"><input maxlength="1" autocomplete="off"><input maxlength="1" autocomplete="off"><input maxlength="1" autocomplete="off"><input maxlength="1" autocomplete="off">
+          </div>
+          <button class="btn quiet" onclick="joinLobby()">Join lobby</button>
         </div>
-        <button class="btn quiet" onclick="joinLobby()">Join lobby</button>
       </div>
     </section>
 
-    <!-- 3. Room Screen -->
+    <!-- ROOM -->
     <section class="screen" id="s-room">
-      <div class="roomhead">
-        <div class="row" style="gap:8px">
-          <button class="chip" id="copy" onclick="copyRoomCode()" title="Copy invite link">
-            <strong id="display-room-code">------</strong> <span>Tap to copy link</span>
-          </button>
-        </div>
-        <div class="row" style="gap:8px">
-          <button class="btn quiet" id="btn-ridemode" onclick="toggleRideMode()" style="min-height:38px; padding:6px 12px; font-size:13px;">Ride mode</button>
+      <div class="rhead">
+        <button class="chip" id="copy" onclick="copyRoomCode()">
+          <strong id="display-room-code">------</strong><span>Copy link</span>
+        </button>
+        <div class="row">
+          <button class="btn text" id="shrink" onclick="toggleMiniPlayer()">Shrink video</button>
           <button class="btn text" onclick="leaveLobby()">Leave</button>
         </div>
       </div>
 
-      <div class="riders" id="riders"></div>
-
-      <div class="player" id="yt">
-        <div class="placeholder" id="ph">Nothing playing yet.<br>Search a song to start the ride.</div>
-        <button id="btn-rejoin-audio" onclick="rejoinAudioAndMedia()" class="btn primary" style="display:none; position:absolute; inset:20px; z-index:10; font-size:18px;">
-          Tap to rejoin audio
-        </button>
-      </div>
-
-      <div class="now">
-        <div class="row">
-          <div>
-            <div class="title" id="np-title">Queue is empty</div>
-            <div class="by" id="np-by">Add the first song below</div>
-          </div>
-          <button class="btn quiet" id="btn-skip" onclick="voteSkip()" style="min-height:48px; padding:10px 16px; font-size:14px; display:none;">Skip</button>
+      <div class="stage" id="stage">
+        <div class="player" id="yt">
+          <div class="placeholder" id="ph">Nothing playing yet.<br>Search a song to start the ride.</div>
+          <button id="btn-rejoin-audio" onclick="rejoinAudioAndMedia()" class="btn primary" style="display:none; position:absolute; inset:20px; z-index:10;">
+            Tap to rejoin audio
+          </button>
+        </div>
+        <div class="meta">
+          <div class="title" id="np-title">Nothing playing</div>
+          <div class="by" id="np-by">Add a song from Search</div>
         </div>
         <div class="lane" aria-hidden="true"><i id="bar"></i></div>
         <div class="times"><span id="t-now">0:00</span><span id="t-len">0:00</span></div>
       </div>
 
-      <div class="mic">
+      <div class="talkbar" id="talkbar">
+        <span class="bars"><b></b><b></b><b></b></span>
+        <span id="talktext">Nobody is talking</span>
+        <button class="sm skip" id="skip" onclick="voteSkip()" style="margin-left:auto; display:none;">Vote skip 0/0</button>
+      </div>
+
+      <div class="riders" id="riders"></div>
+
+      <!-- Scrollable Tab Container -->
+      <div class="tabs">
+        <div class="pane on" id="p-queue">
+          <div class="sec"><h2>Up next</h2><span class="fine" id="qcount"></span></div>
+          <div class="list" id="queue"><div class="empty">Nothing queued. Open Search to add a song.</div></div>
+        </div>
+
+        <div class="pane" id="p-search">
+          <form class="sfield" id="sform" onsubmit="searchYouTube(); return false;">
+            <input id="q" type="text" inputmode="search" enterkeyhint="search" placeholder="Song or artist" autocomplete="off">
+            <button type="button" class="btn text clr" id="clr" onclick="clearSearch()">Clear</button>
+            <button class="btn quiet" type="submit" style="min-height:50px">Search</button>
+          </form>
+          <div class="sec" id="rhead" hidden>
+            <span class="fine">Results</span>
+            <button class="btn text" id="clr2" onclick="clearSearch()" style="min-height:36px">Clear results</button>
+          </div>
+          <div class="list" id="results"><div class="empty">Search for a song to add it to the queue.</div></div>
+        </div>
+
+        <div class="pane" id="p-sig">
+          <h2>Quick signals</h2>
+          <div class="sig">
+            <button class="btn" onclick="sendSignal('Fuel stop')">Fuel stop</button>
+            <button class="btn" onclick="sendSignal('Slow down')">Slow down</button>
+            <button class="btn" onclick="sendSignal('Hazard ahead')">Hazard ahead</button>
+            <button class="btn" onclick="sendSignal('Pull over')">Pull over</button>
+            <button class="btn" onclick="sendSignal('Ready')">Ready</button>
+          </div>
+          <div class="setting">
+            <span>Lower music when someone talks</span>
+            <input type="checkbox" id="chk-ducking" checked style="width:22px;height:22px;accent-color:var(--accent)">
+          </div>
+        </div>
+
+        <div class="pane" id="p-mic">
+          <h2>Check your microphone</h2>
+          <p class="fine">Press Start, then say something. The bar should move when you talk.</p>
+          <div class="meter"><i id="lvl"></i></div>
+          <div class="status" id="mstat">Not tested yet.</div>
+          <div class="fine" id="mdev"></div>
+          <button class="btn primary" id="mtest" onclick="toggleMicTest()">Start mic test</button>
+        </div>
+      </div>
+
+      <!-- Bottom Dock Navigation -->
+      <nav class="dock" role="tablist" aria-label="Room">
+        <button class="tab" role="tab" aria-selected="true" data-tab="p-queue" onclick="switchTab('p-queue', this)">Queue<em id="qn">0</em></button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="p-search" onclick="switchTab('p-search', this)">Search</button>
         <button class="talk" id="talk" aria-pressed="false">Hold to talk</button>
-        <div class="fine" id="mic-note">Mic is off</div>
-      </div>
-
-      <!-- Quick Signals Section -->
-      <div class="stack">
-        <h2>Quick signals</h2>
-        <div class="row" style="flex-wrap:wrap; gap:8px;">
-          <button class="btn quiet" onclick="sendSignal('Fuel stop')" style="flex:1 1 45%; min-height:52px;">Fuel stop</button>
-          <button class="btn quiet" onclick="sendSignal('Slow down')" style="flex:1 1 45%; min-height:52px;">Slow down</button>
-          <button class="btn quiet" onclick="sendSignal('Hazard ahead')" style="flex:1 1 45%; min-height:52px;">Hazard ahead</button>
-          <button class="btn quiet" onclick="sendSignal('Pull over')" style="flex:1 1 45%; min-height:52px;">Pull over</button>
-          <button class="btn quiet" onclick="sendSignal('Ready')" style="flex:1 1 100%; min-height:52px;">Ready</button>
-        </div>
-      </div>
-
-      <div class="panel collapsible-section" style="padding:14px 18px;">
-        <div class="row">
-          <span style="font-size:14px; font-weight:500;">Lower music when someone talks</span>
-          <input type="checkbox" id="chk-ducking" checked style="width:20px; height:20px; accent-color:var(--lamp); cursor:pointer;">
-        </div>
-      </div>
-
-      <div class="stack collapsible-section">
-        <h2>Add a song</h2>
-        <form class="search" id="sform" onsubmit="searchYouTube(); return false;">
-          <input id="q" type="search" placeholder="Song or artist" autocomplete="off">
-          <button class="btn quiet" id="go" type="submit">Search</button>
-        </form>
-        <div class="list" id="results"><div class="empty">Results appear here.</div></div>
-      </div>
-
-      <div class="stack collapsible-section">
-        <h2>Up next</h2>
-        <div class="list" id="queue"><div class="empty">Nothing queued.</div></div>
-      </div>
+        <button class="tab" role="tab" aria-selected="false" data-tab="p-sig" onclick="switchTab('p-sig', this)">Signals</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="p-mic" onclick="switchTab('p-mic', this)">Mic check</button>
+      </nav>
     </section>
+
   </div>
 
   <div id="audio-streams"></div>
