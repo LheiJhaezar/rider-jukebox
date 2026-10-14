@@ -64,8 +64,8 @@
     <!-- 3. Room Screen -->
     <section class="screen" id="s-room">
       <div class="roomhead">
-        <button class="chip" id="copy" onclick="copyRoomCode()" title="Copy room code">
-          <strong id="display-room-code">------</strong> <span>Tap to copy</span>
+        <button class="chip" id="copy" onclick="copyRoomCode()" title="Copy room link">
+          <strong id="display-room-code">------</strong> <span>Tap to copy link</span>
         </button>
         <button class="btn text" onclick="leaveLobby()">Leave</button>
       </div>
@@ -77,8 +77,13 @@
       </div>
 
       <div class="now">
-        <div class="title" id="np-title">Queue is empty</div>
-        <div class="by" id="np-by">Add the first song below</div>
+        <div class="row">
+          <div>
+            <div class="title" id="np-title">Queue is empty</div>
+            <div class="by" id="np-by">Add the first song below</div>
+          </div>
+          <button class="btn quiet" id="btn-skip" onclick="voteSkip()" style="min-height:44px; padding:8px 14px; font-size:13px; display:none;">Skip</button>
+        </div>
         <div class="lane" aria-hidden="true"><i id="bar"></i></div>
         <div class="times"><span id="t-now">0:00</span><span id="t-len">0:00</span></div>
       </div>
