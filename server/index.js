@@ -16,7 +16,6 @@ const io = new Server(server, {
   }
 });
 
-// YouTube Proxy Endpoint
 app.get('/api/search-youtube', async (req, res) => {
   const query = req.query.q;
   const apiKey = process.env.YOUTUBE_API_KEY;
@@ -37,39 +36,43 @@ app.get('/api/search-youtube', async (req, res) => {
     });
     res.json(response.data.items);
   } catch (err) {
-    console.error('YouTube API Error:', err.response ? err.response.data : err.message);
     res.status(500).json({ error: 'Failed to fetch YouTube videos' });
   }
 });
 
-// Real-Time Socket Lobby & Synchronized Playback
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-
   socket.on('join-room', ({ roomCode, userName, isHost }) => {
     socket.join(roomCode);
     socket.roomCode = roomCode;
     socket.userName = userName;
 
-    console.log(`${userName} joined room ${roomCode} (Host: ${isHost})`);
+    // Notify existing room members for WebRTC voice handshake
+    socket.to(roomCode).emit('user-joined-webrtc', { socketId: socket.id });
+  });
 
-    // Notify room of new member
-    io.to(roomCode).emit('user-joined', { userName, isHost });
+  // WebRTC Signaling Events
+  socket.on('webrtc-offer', ({ targetId, offer }) => {
+    io.to(targetId).emit('webrtc-offer', { senderId: socket.id, offer });
+  });
+
+  socket.on('webrtc-answer', ({ targetId, answer }) => {
+    io.to(targetId).emit('webrtc-answer', { senderId: socket.id, answer });
+  });
+
+  socket.on('webrtc-ice-candidate', ({ targetId, candidate }) => {
+    io.to(targetId).emit('webrtc-ice-candidate', { senderId: socket.id, candidate });
   });
 
   socket.on('play-video', ({ roomCode, videoId, videoTitle }) => {
-    // Broadcast selected video to all riders in the room
     io.to(roomCode).emit('sync-play-video', { videoId, videoTitle });
   });
 
   socket.on('disconnect', () => {
-    if (socket.roomCode && socket.userName) {
-      io.to(socket.roomCode).emit('user-left', { userName: socket.userName });
+    if (socket.roomCode) {
+      io.to(socket.roomCode).emit('user-disconnected-webrtc', { socketId: socket.id });
     }
   });
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));

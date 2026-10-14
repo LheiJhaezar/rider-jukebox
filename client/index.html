@@ -6,19 +6,21 @@
   <title>Rider Jukebox</title>
   <link rel="stylesheet" href="style.css">
   
-  <!-- Socket.io -->
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <!-- Supabase JS -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- YouTube IFrame API -->
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
   <div class="container">
     <h1>🏍️ Rider Jukebox</h1>
 
+    <!-- INITIALIZATION SPINNER -->
+    <div id="loading-screen" class="card">
+      <p>Connecting & restoring session...</p>
+    </div>
+
     <!-- 1. AUTH SCREEN -->
-    <div id="auth-screen" class="card">
+    <div id="auth-screen" class="card" style="display:none;">
       <h2>Welcome Rider</h2>
       <p>Log in with Google to sync music and talk real-time during rides.</p>
       <button onclick="loginWithGoogle()" class="btn-google">Sign in with Google</button>
@@ -42,21 +44,38 @@
       </div>
     </div>
 
-    <!-- 3. JUKEBOX INTERFACE SCREEN -->
+    <!-- 3. JUKEBOX & VOICE INTERFACE -->
     <div id="jukebox-screen" class="card" style="display:none;">
       <div class="room-bar">
         <h3>Room: <span id="display-room-code">---</span></h3>
         <button onclick="leaveLobby()" class="btn-danger">Leave</button>
       </div>
 
-      <!-- Synchronized YouTube Player -->
-      <div class="player-section">
+      <!-- VOICE CHAT CONTROLS -->
+      <div class="voice-section card-inner">
+        <h4>🎙️ Voice Intercom</h4>
+        <div class="voice-controls">
+          <button id="btn-mic" onclick="toggleMicrophone()" class="btn-primary">Enable Microphone</button>
+          <span id="mic-status">Mic: Muted</span>
+        </div>
+        <!-- Hidden container to play incoming WebRTC voice streams -->
+        <div id="audio-streams"></div>
+      </div>
+
+      <!-- SYNCHRONIZED YOUTUBE PLAYER -->
+      <div class="player-section card-inner">
         <h4 id="now-playing-title">No video playing</h4>
+        
+        <!-- Mobile Background Unlock Prompt -->
+        <button id="btn-unlock-audio" onclick="unlockMobileAudio()" class="btn-accent">
+          🔊 Enable Mobile Background Audio
+        </button>
+
         <div id="youtube-player"></div>
       </div>
 
-      <!-- YouTube Search -->
-      <div class="search-section">
+      <!-- SEARCH SECTION -->
+      <div class="search-section card-inner">
         <input type="text" id="yt-search-input" placeholder="Search song or artist..." />
         <button onclick="searchYouTube()" class="btn-primary">Search</button>
       </div>
