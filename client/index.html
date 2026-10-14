@@ -5,52 +5,64 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rider Jukebox</title>
   <link rel="stylesheet" href="style.css">
-  <!-- Socket.io Client Library -->
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  
+  <!-- Socket.io -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- Supabase JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- YouTube IFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
-  <div class="app-container">
-    <header>
-      <h1>🏍️ Rider Jukebox</h1>
-      <p id="server-status">Status: Disconnected</p>
-    </header>
+  <div class="container">
+    <h1>🏍️ Rider Jukebox</h1>
 
-    <!-- Room Entry Section -->
-    <section id="room-selection" class="card">
-      <h2>Join or Create Room</h2>
-      <input type="text" id="username-input" placeholder="Your Name (e.g., Alex)" />
-      <input type="text" id="room-input" placeholder="Room Name / Code (e.g., Ride123)" />
-      <button id="join-btn" class="btn primary-btn">Connect to Ride</button>
-    </section>
+    <!-- 1. AUTH SCREEN -->
+    <div id="auth-screen" class="card">
+      <h2>Welcome Rider</h2>
+      <p>Log in with Google to sync music and talk real-time during rides.</p>
+      <button onclick="loginWithGoogle()" class="btn-google">Sign in with Google</button>
+    </div>
 
-    <!-- Main Dashboard (Hidden until connected) -->
-    <main id="dashboard" class="card hidden">
-      <div class="room-info">
-        <span id="display-room-name">Room: ---</span>
-        <span id="member-count">Riders: 1</span>
+    <!-- 2. LOBBY OPTIONS SCREEN -->
+    <div id="lobby-screen" class="card" style="display:none;">
+      <div class="user-header">
+        <p>Logged in as: <strong id="user-display-name">...</strong></p>
+        <button onclick="logout()" class="btn-secondary">Log Out</button>
       </div>
 
-      <!-- Jukebox Player -->
-      <section class="jukebox">
-        <h3>🎵 Sync Jukebox</h3>
-        <input type="url" id="audio-url-input" placeholder="Paste direct MP3 audio URL here..." />
-        <div class="player-controls">
-          <button id="play-btn" class="btn success-btn">▶ Play</button>
-          <button id="pause-btn" class="btn warning-btn">⏸ Pause</button>
+      <div class="lobby-actions">
+        <h3>Create or Join Ride</h3>
+        <button onclick="createLobby()" class="btn-primary">Create New Lobby</button>
+        <hr>
+        <div class="input-group">
+          <input type="text" id="join-room-input" placeholder="Enter Room Code (e.g. RIDE123)" />
+          <button onclick="joinLobby()" class="btn-secondary">Join Lobby</button>
         </div>
-        <audio id="audio-player" preload="auto"></audio>
-      </section>
+      </div>
+    </div>
 
-      <!-- Helmet Intercom / Mic Controls -->
-      <section class="intercom">
-        <h3>🎙️ Helmet Intercom</h3>
-        <div class="intercom-controls">
-          <button id="mic-toggle-btn" class="btn danger-btn">Mic OFF</button>
-        </div>
-        <!-- Hidden audio element for receiving remote rider voice -->
-        <audio id="remote-voice" autoplay></audio>
-      </section>
-    </main>
+    <!-- 3. JUKEBOX INTERFACE SCREEN -->
+    <div id="jukebox-screen" class="card" style="display:none;">
+      <div class="room-bar">
+        <h3>Room: <span id="display-room-code">---</span></h3>
+        <button onclick="leaveLobby()" class="btn-danger">Leave</button>
+      </div>
+
+      <!-- Synchronized YouTube Player -->
+      <div class="player-section">
+        <h4 id="now-playing-title">No video playing</h4>
+        <div id="youtube-player"></div>
+      </div>
+
+      <!-- YouTube Search -->
+      <div class="search-section">
+        <input type="text" id="yt-search-input" placeholder="Search song or artist..." />
+        <button onclick="searchYouTube()" class="btn-primary">Search</button>
+      </div>
+
+      <div id="search-results" class="results-list"></div>
+    </div>
   </div>
 
   <script src="app.js"></script>

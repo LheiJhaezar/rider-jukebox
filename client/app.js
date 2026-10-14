@@ -1,193 +1,125 @@
-// Connect to local Node.js server (When deployed to Render, swap this URL to your Render backend URL)
-const socket = io("https://rider-jukebox.onrender.com", {
-  transports: ["polling", "websocket"]
-});
-// DOM Elements
-const serverStatus = document.getElementById("server-status");
-const roomSelection = document.getElementById("room-selection");
-const dashboard = document.getElementById("dashboard");
-const usernameInput = document.getElementById("username-input");
-const roomInput = document.getElementById("room-input");
-const joinBtn = document.getElementById("join-btn");
-const displayRoomName = document.getElementById("display-room-name");
-const memberCount = document.getElementById("member-count");
-
-const audioUrlInput = document.getElementById("audio-url-input");
-const playBtn = document.getElementById("play-btn");
-const pauseBtn = document.getElementById("pause-btn");
-const audioPlayer = document.getElementById("audio-player");
-const micToggleBtn = document.getElementById("mic-toggle-btn");
-const remoteVoice = document.getElementById("remote-voice");
-
-let currentRoom = "";
-let currentUser = "";
-let localStream = null;
-let peerConnection = null;
-let isMicOn = false;
-
-// WebRTC STUN Servers (Free from Google)
-const rtcConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-};
-
-// 1. Connection Status Updates
-socket.on("connect", () => {
-  serverStatus.innerText = "Status: Connected to Server";
-  serverStatus.style.color = "#4caf50";
+// 1. BACKEND & SUPABASE INITIALIZATION
+const SERVER_URL = "https://rider-jukebox.onrender.com";
+const socket = io(SERVER_URL, {
+  transports: ["polling", "websocket"],
+  secure: true
 });
 
-socket.on("disconnect", () => {
-  serverStatus.innerText = "Status: Disconnected (Reconnecting...)";
-  serverStatus.style.color = "#f44336";
-});
+const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_URL.supabase.co"; // Replace with your Supabase URL
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // Replace with your Supabase Anon Key
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// 2. Room Connection Logic
-joinBtn.addEventListener("click", () => {
-  currentUser = usernameInput.value.trim() || "Rider";
-  currentRoom = roomInput.value.trim();
+let currentUser = null;
+let currentRoomCode = null;
+let player = null;
 
-  if (!currentRoom) {
-    alert("Please enter a Room Name or Code.");
-    return;
-  }
+// 2. AUTH STATE LISTENER (PERSIST LOG IN ON RELOAD)
+supabase.auth.onAuthStateChange((event, session) => {
+  if (session) {
+    currentUser = session.user;
+    const name = currentUser.user_metadata.full_name || currentUser.email;
+    document.getElementById("user-display-name").innerText = name;
 
-  socket.emit("join-room", { roomId: currentRoom, user: { name: currentUser } });
-  
-  roomSelection.classList.add("hidden");
-  dashboard.classList.remove("hidden");
-  displayRoomName.innerText = `Room: ${currentRoom}`;
-});
-
-// Sync state on joining
-socket.on("sync-state", (state) => {
-  if (state.members) {
-    memberCount.innerText = `Riders: ${state.members.length}`;
-  }
-  if (state.trackUrl) {
-    audioPlayer.src = state.trackUrl;
-    audioPlayer.currentTime = state.currentTime;
-    if (state.isPlaying) audioPlayer.play();
-  }
-});
-
-socket.on("user-joined", (data) => {
-  console.log("Rider joined:", data);
-});
-
-// 3. Jukebox Sync Controls & Media Session API
-playBtn.addEventListener("click", () => {
-  const url = audioUrlInput.value.trim();
-  if (url && audioPlayer.src !== url) {
-    audioPlayer.src = url;
-  }
-  audioPlayer.play();
-  setupMediaSession();
-  socket.emit("play-track", {
-    roomId: currentRoom,
-    trackUrl: audioPlayer.src,
-    currentTime: audioPlayer.currentTime
-  });
-});
-
-pauseBtn.addEventListener("click", () => {
-  audioPlayer.pause();
-  socket.emit("pause-track", {
-    roomId: currentRoom,
-    currentTime: audioPlayer.currentTime
-  });
-});
-
-socket.on("track-played", ({ trackUrl, currentTime }) => {
-  if (audioPlayer.src !== trackUrl) {
-    audioPlayer.src = trackUrl;
-  }
-  audioPlayer.currentTime = currentTime;
-  audioPlayer.play();
-  setupMediaSession();
-});
-
-socket.on("track-paused", ({ currentTime }) => {
-  audioPlayer.currentTime = currentTime;
-  audioPlayer.pause();
-});
-
-// Media Session API for locked phone background playback
-function setupMediaSession() {
-  if ("mediaSession" in navigator) {
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: "Rider Sync Jukebox",
-      artist: currentUser,
-      album: currentRoom
-    });
-
-    navigator.mediaSession.setActionHandler("play", () => {
-      playBtn.click();
-    });
-
-    navigator.mediaSession.setActionHandler("pause", () => {
-      pauseBtn.click();
-    });
-  }
-}
-
-// 4. Helmet Intercom (WebRTC Microphone Stream)
-micToggleBtn.addEventListener("click", async () => {
-  if (!isMicOn) {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      isMicOn = true;
-      micToggleBtn.innerText = "Mic ON 🎙️";
-      micToggleBtn.className = "btn success-btn";
-
-      initWebRTC();
-    } catch (err) {
-      alert("Microphone access denied or not available.");
-      console.error(err);
-    }
+    document.getElementById("auth-screen").style.display = "none";
+    document.getElementById("lobby-screen").style.display = "block";
   } else {
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-    }
-    isMicOn = false;
-    micToggleBtn.innerText = "Mic OFF";
-    micToggleBtn.className = "btn danger-btn";
+    currentUser = null;
+    document.getElementById("auth-screen").style.display = "block";
+    document.getElementById("lobby-screen").style.display = "none";
+    document.getElementById("jukebox-screen").style.display = "none";
   }
 });
 
-function initWebRTC() {
-  peerConnection = new RTCPeerConnection(rtcConfig);
-
-  localStream.getTracks().forEach(track => {
-    peerConnection.addTrack(track, localStream);
-  });
-
-  peerConnection.ontrack = (event) => {
-    remoteVoice.srcObject = event.streams[0];
-  };
-
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      socket.emit("webrtc-candidate", { targetId: "broadcast", candidate: event.candidate });
+async function loginWithGoogle() {
+  await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
     }
-  };
+  });
 }
 
-socket.on("webrtc-offer", async ({ senderId, offer }) => {
-  if (!peerConnection) initWebRTC();
-  await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-  const answer = await peerConnection.createAnswer();
-  await peerConnection.setLocalDescription(answer);
-  socket.emit("webrtc-answer", { targetId: senderId, answer });
-});
+async function logout() {
+  await supabase.auth.signOut();
+}
 
-socket.on("webrtc-answer", async ({ answer }) => {
-  if (peerConnection) {
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+// 3. LOBBY CREATION & JOINING
+function createLobby() {
+  const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+  joinSocketRoom(roomCode, true);
+}
+
+function joinLobby() {
+  const roomCode = document.getElementById("join-room-input").value.trim().toUpperCase();
+  if (!roomCode) return alert("Please enter a valid room code.");
+  joinSocketRoom(roomCode, false);
+}
+
+function joinSocketRoom(roomCode, isHost) {
+  currentRoomCode = roomCode;
+  const userName = currentUser.user_metadata.full_name || currentUser.email;
+
+  socket.emit("join-room", { roomCode, userName, isHost });
+
+  document.getElementById("display-room-code").innerText = roomCode;
+  document.getElementById("lobby-screen").style.display = "none";
+  document.getElementById("jukebox-screen").style.display = "block";
+}
+
+function leaveLobby() {
+  location.reload();
+}
+
+// 4. YOUTUBE API PLAYER INITIALIZATION
+function onYouTubeIframeAPIReady() {
+  player = new YT.Player('youtube-player', {
+    height: '220',
+    width: '100%',
+    videoId: '',
+    playerVars: {
+      'autoplay': 1,
+      'playsinline': 1
+    }
+  });
+}
+
+// 5. YOUTUBE SEARCH & SYNCHRONIZED PLAYBACK
+async function searchYouTube() {
+  const query = document.getElementById("yt-search-input").value.trim();
+  if (!query) return;
+
+  try {
+    const response = await fetch(`${SERVER_URL}/api/search-youtube?q=${encodeURIComponent(query)}`);
+    const videos = await response.json();
+
+    const resultsContainer = document.getElementById("search-results");
+    resultsContainer.innerHTML = "";
+
+    videos.forEach(video => {
+      const item = document.createElement("div");
+      item.className = "video-card";
+      item.innerHTML = `
+        <img src="${video.snippet.thumbnails.default.url}" width="80" />
+        <div class="video-info">
+          <strong>${video.snippet.title}</strong>
+          <button onclick="selectVideo('${video.id.videoId}', '${video.snippet.title.replace(/'/g, "\\'")}')">Play for Ride</button>
+        </div>
+      `;
+      resultsContainer.appendChild(item);
+    });
+  } catch (err) {
+    alert("Error fetching YouTube search results.");
   }
-});
+}
 
-socket.on("webrtc-candidate", async ({ candidate }) => {
-  if (peerConnection && candidate) {
-    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+function selectVideo(videoId, videoTitle) {
+  socket.emit("play-video", { roomCode: currentRoomCode, videoId, videoTitle });
+}
+
+// Receive Real-time Sync Event from Backend
+socket.on("sync-play-video", ({ videoId, videoTitle }) => {
+  document.getElementById("now-playing-title").innerText = `Playing: ${videoTitle}`;
+  if (player && player.loadVideoById) {
+    player.loadVideoById(videoId);
   }
 });
