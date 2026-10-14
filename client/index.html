@@ -1,89 +1,110 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Rider Jukebox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  
+
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
-  <div class="container">
-    <h1>🏍️ Rider Jukebox</h1>
+  <div class="app">
+    <div class="brand">Rider Jukebox <small id="status"></small></div>
 
-    <!-- INITIALIZATION SPINNER -->
-    <div id="loading-screen" class="card">
-      <p>Connecting & restoring session...</p>
-    </div>
-
-    <!-- 1. AUTH SCREEN -->
-    <div id="auth-screen" class="card" style="display:none;">
-      <h2>Welcome Rider</h2>
-      <p>Log in with Google to sync music and talk real-time during rides.</p>
-      <button onclick="loginWithGoogle()" class="btn-google">Sign in with Google</button>
-    </div>
-
-    <!-- 2. LOBBY OPTIONS SCREEN -->
-    <div id="lobby-screen" class="card" style="display:none;">
-      <div class="user-header">
-        <p>Logged in as: <strong id="user-display-name">...</strong></p>
-        <button onclick="logout()" class="btn-secondary">Log Out</button>
-      </div>
-
-      <div class="lobby-actions">
-        <h3>Create or Join Ride</h3>
-        <button onclick="createLobby()" class="btn-primary">Create New Lobby</button>
-        <hr>
-        <div class="input-group">
-          <input type="text" id="join-room-input" placeholder="Enter Room Code (e.g. RIDE123)" />
-          <button onclick="joinLobby()" class="btn-secondary">Join Lobby</button>
+    <!-- 1. Sign in Screen -->
+    <section class="screen on" id="s-login">
+      <div class="hero">
+        <h1>One playlist.<br>Every bike.</h1>
+        <p class="lead">Sign in to play the same song at the same time and talk to your group while you ride.</p>
+        <div class="actions stack">
+          <button class="btn primary" onclick="loginWithGoogle()">Continue with Google</button>
+          <p class="fine">We only use your name and photo so riders know who is who.</p>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- 3. JUKEBOX & VOICE INTERFACE -->
-    <div id="jukebox-screen" class="card" style="display:none;">
-      <div class="room-bar">
-        <h3>Room: <span id="display-room-code">---</span></h3>
-        <button onclick="leaveLobby()" class="btn-danger">Leave</button>
-      </div>
-
-      <!-- VOICE CHAT CONTROLS -->
-      <div class="voice-section card-inner">
-        <h4>🎙️ Voice Intercom</h4>
-        <div class="voice-controls">
-          <button id="btn-mic" onclick="toggleMicrophone()" class="btn-primary">Enable Microphone</button>
-          <span id="mic-status">Mic: Muted</span>
+    <!-- 2. Lobby Screen -->
+    <section class="screen" id="s-lobby">
+      <div class="row">
+        <div class="who">
+          <div class="avatar" id="user-avatar">--</div>
+          <div>
+            <div style="font-weight:600" id="user-display-name">Loading...</div>
+            <div class="fine">Signed in</div>
+          </div>
         </div>
-        <!-- Hidden container to play incoming WebRTC voice streams -->
-        <div id="audio-streams"></div>
+        <button class="btn text" onclick="logout()">Log out</button>
       </div>
+      <div class="stack" style="margin-top:4vh">
+        <h2>Start a ride</h2>
+        <p class="lead">Create a lobby and share the code with your group.</p>
+        <button class="btn primary" onclick="createLobby()">Create new lobby</button>
+      </div>
+      <div class="or">or join one</div>
+      <div class="panel stack">
+        <label class="fine" for="c0">Room code</label>
+        <div class="code" id="code" aria-label="Six character room code">
+          <input id="c0" maxlength="1" autocomplete="off">
+          <input maxlength="1" autocomplete="off">
+          <input maxlength="1" autocomplete="off">
+          <input maxlength="1" autocomplete="off">
+          <input maxlength="1" autocomplete="off">
+          <input maxlength="1" autocomplete="off">
+        </div>
+        <button class="btn quiet" onclick="joinLobby()">Join lobby</button>
+      </div>
+    </section>
 
-      <!-- SYNCHRONIZED YOUTUBE PLAYER -->
-      <div class="player-section card-inner">
-        <h4 id="now-playing-title">No video playing</h4>
-        
-        <!-- Mobile Background Unlock Prompt -->
-        <button id="btn-unlock-audio" onclick="unlockMobileAudio()" class="btn-accent">
-          🔊 Enable Mobile Background Audio
+    <!-- 3. Room Screen -->
+    <section class="screen" id="s-room">
+      <div class="roomhead">
+        <button class="chip" id="copy" onclick="copyRoomCode()" title="Copy room code">
+          <strong id="display-room-code">------</strong> <span>Tap to copy</span>
         </button>
-
-        <div id="youtube-player"></div>
+        <button class="btn text" onclick="leaveLobby()">Leave</button>
       </div>
 
-      <!-- SEARCH SECTION -->
-      <div class="search-section card-inner">
-        <input type="text" id="yt-search-input" placeholder="Search song or artist..." />
-        <button onclick="searchYouTube()" class="btn-primary">Search</button>
+      <div class="riders" id="riders"></div>
+
+      <div class="player" id="yt">
+        <div class="placeholder" id="ph">Nothing playing yet.<br>Search a song to start the ride.</div>
       </div>
 
-      <div id="search-results" class="results-list"></div>
-    </div>
+      <div class="now">
+        <div class="title" id="np-title">Queue is empty</div>
+        <div class="by" id="np-by">Add the first song below</div>
+        <div class="lane" aria-hidden="true"><i id="bar"></i></div>
+        <div class="times"><span id="t-now">0:00</span><span id="t-len">0:00</span></div>
+      </div>
+
+      <div class="mic">
+        <button class="talk" id="talk" aria-pressed="false">Hold to talk</button>
+        <div class="fine" id="mic-note">Mic is off</div>
+      </div>
+
+      <div class="stack">
+        <h2>Add a song</h2>
+        <form class="search" id="sform" onsubmit="searchYouTube(); return false;">
+          <input id="q" type="search" placeholder="Song or artist" autocomplete="off">
+          <button class="btn quiet" id="go" type="submit">Search</button>
+        </form>
+        <div class="list" id="results"><div class="empty">Results appear here.</div></div>
+      </div>
+
+      <div class="stack">
+        <h2>Up next</h2>
+        <div class="list" id="queue"><div class="empty">Nothing queued.</div></div>
+      </div>
+    </section>
   </div>
 
+  <div id="audio-streams"></div>
   <script src="app.js"></script>
 </body>
 </html>
