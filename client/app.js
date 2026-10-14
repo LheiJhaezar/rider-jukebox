@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Ensure your actual anon key is placed here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Place your anon key here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -25,14 +25,14 @@ let isRideMode = false;
 let wakeLock = null;
 let audioUnlocked = false;
 
-// Web Audio API & Ducking State
 let audioCtx = null;
-let audioAnalysers = {}; // Keyed by userId or 'local'
+let audioAnalysers = {};
 let audioAnimFrame = null;
 let targetMusicVolume = 100;
 let baseMusicVolume = 100;
 let isDucked = false;
 let duckTimeout = null;
+let bannerTimeout = null;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
@@ -51,7 +51,7 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. WEB AUDIO API & VOLUME-REACTIVITY
+// 1. WEB AUDIO API CHIME & AUDIO PROCESSING
 function initAudioContext() {
   if (!audioCtx) {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -61,6 +61,62 @@ function initAudioContext() {
     audioCtx.resume();
   }
 }
+
+function playSynthesizedChime() {
+  if (!audioCtx) return;
+
+  const now = audioCtx.currentTime;
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc1.type = 'sine';
+  osc2.type = 'sine';
+
+  osc1.frequency.setValueAtTime(660, now);
+  osc2.frequency.setValueAtTime(880, now + 0.15);
+
+  gain.gain.setValueAtTime(0.3, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+
+  osc1.connect(gain);
+  osc2.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc1.start(now);
+  osc1.stop(now + 0.15);
+  osc2.start(now + 0.15);
+  osc2.stop(now + 0.4);
+}
+
+function sendSignal(type) {
+  if (!currentRoomCode) return;
+  socket.emit('send-quick-signal', { roomCode: currentRoomCode, signalType: type });
+}
+
+socket.on('receive-quick-signal', ({ senderName, signalType }) => {
+  const banner = document.getElementById('signal-banner');
+  const bannerText = document.getElementById('signal-text');
+
+  bannerText.innerText = `${senderName.split(" ")[0]}: ${signalType}`;
+  banner.style.display = 'block';
+
+  playSynthesizedChime();
+
+  // Duck music during chime
+  if (player && player.setVolume) {
+    baseMusicVolume = player.getVolume() || 100;
+    player.setVolume(Math.round(baseMusicVolume * 0.2));
+    setTimeout(() => {
+      if (!isDucked) player.setVolume(baseMusicVolume);
+    }, 2000);
+  }
+
+  if (bannerTimeout) clearTimeout(bannerTimeout);
+  bannerTimeout = setTimeout(() => {
+    banner.style.display = 'none';
+  }, 5000);
+});
 
 function attachAudioAnalyser(id, stream) {
   if (!audioCtx) return;
@@ -90,7 +146,7 @@ function removeAudioAnalyser(id) {
 
 function processAudioVolumes() {
   let anyRiderTalking = false;
-  const TALKING_THRESHOLD = 25; // Filters out ambient wind/road noise
+  const TALKING_THRESHOLD = 25;
 
   Object.entries(audioAnalysers).forEach(([id, obj]) => {
     obj.analyser.getByteFrequencyData(obj.dataArray);
@@ -119,7 +175,6 @@ function processAudioVolumes() {
     }
   });
 
-  // Smooth Music Ducking Handling
   const enableDucking = document.getElementById("chk-ducking")?.checked;
   if (enableDucking) {
     if (anyRiderTalking) {
@@ -294,7 +349,7 @@ function leaveLobby() {
   location.href = window.location.origin;
 }
 
-// 4. USER GESTURE UNLOCK & WEBRTC
+// 4. WEBRTC & PUSH-TO-TALK
 async function rejoinAudioAndMedia() {
   audioUnlocked = true;
   document.getElementById("btn-rejoin-audio").style.display = "none";

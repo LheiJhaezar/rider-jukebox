@@ -15,9 +15,13 @@
 </head>
 <body>
   <div class="app">
+    <!-- Top Signal Banner Overlay -->
+    <div id="signal-banner" class="panel" style="display:none; position:sticky; top:10px; z-index:100; background:var(--lamp); color:var(--lamp-ink); font-weight:800; font-family:var(--display); font-size:20px; text-align:center; padding:14px; border:0; box-shadow:0 8px 24px rgba(0,0,0,0.5);">
+      <span id="signal-text">Signal message</span>
+    </div>
+
     <div class="brand">Rider Jukebox <small id="status"></small></div>
 
-    <!-- Rejoining Loading Overlay -->
     <div id="rejoining-loader" class="panel stack" style="display:none; text-align:center; margin-top:20vh;">
       <h2>Rejoining ride</h2>
       <p class="fine">Restoring session and room state...</p>
@@ -86,7 +90,6 @@
 
       <div class="riders" id="riders"></div>
 
-      <!-- YouTube Container with Tap-To-Rejoin Audio Gate Overlay -->
       <div class="player" id="yt">
         <div class="placeholder" id="ph">Nothing playing yet.<br>Search a song to start the ride.</div>
         <button id="btn-rejoin-audio" onclick="rejoinAudioAndMedia()" class="btn primary" style="display:none; position:absolute; inset:20px; z-index:10; font-size:18px;">
@@ -111,7 +114,18 @@
         <div class="fine" id="mic-note">Mic is off</div>
       </div>
 
-      <!-- Audio & Voice Settings -->
+      <!-- Quick Signals Section -->
+      <div class="stack">
+        <h2>Quick signals</h2>
+        <div class="row" style="flex-wrap:wrap; gap:8px;">
+          <button class="btn quiet" onclick="sendSignal('Fuel stop')" style="flex:1 1 45%; min-height:52px;">Fuel stop</button>
+          <button class="btn quiet" onclick="sendSignal('Slow down')" style="flex:1 1 45%; min-height:52px;">Slow down</button>
+          <button class="btn quiet" onclick="sendSignal('Hazard ahead')" style="flex:1 1 45%; min-height:52px;">Hazard ahead</button>
+          <button class="btn quiet" onclick="sendSignal('Pull over')" style="flex:1 1 45%; min-height:52px;">Pull over</button>
+          <button class="btn quiet" onclick="sendSignal('Ready')" style="flex:1 1 100%; min-height:52px;">Ready</button>
+        </div>
+      </div>
+
       <div class="panel collapsible-section" style="padding:14px 18px;">
         <div class="row">
           <span style="font-size:14px; font-weight:500;">Lower music when someone talks</span>

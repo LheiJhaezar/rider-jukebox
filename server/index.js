@@ -59,7 +59,6 @@ io.on('connection', (socket) => {
 
     const room = rooms[roomCode];
 
-    // Clear reconnect timer if rider was in grace period
     if (room.riders[userId] && room.riders[userId].disconnectTimeout) {
       clearTimeout(room.riders[userId].disconnectTimeout);
       room.riders[userId].disconnectTimeout = null;
@@ -71,17 +70,32 @@ io.on('connection', (socket) => {
       isHost: room.hostUserId === userId,
       status: 'connected',
       connectedAt: room.riders[userId]?.connectedAt || Date.now(),
-      disconnectTimeout: null
+      disconnectTimeout: null,
+      lastSignalTime: 0
     };
 
     socket.join(roomCode);
-
-    // Notify other active peers to re-establish WebRTC P2P voice
     socket.to(roomCode).emit('user-joined-webrtc', { socketId: socket.id, userId });
 
-    // Send full current room state & server timestamp to joining client
     sendFullRoomState(socket, roomCode);
     broadcastRoomState(roomCode);
+  });
+
+  // Quick Signal Event with 3s Rate Limiter
+  socket.on('send-quick-signal', ({ roomCode, signalType }) => {
+    const room = rooms[roomCode];
+    if (!room || !room.riders[socket.userId]) return;
+
+    const rider = room.riders[socket.userId];
+    const now = Date.now();
+
+    if (now - (rider.lastSignalTime || 0) < 3000) return; // 3-second cooldown
+
+    rider.lastSignalTime = now;
+    io.to(roomCode).emit('receive-quick-signal', {
+      senderName: socket.userName,
+      signalType
+    });
   });
 
   socket.on('add-to-queue', ({ roomCode, videoId, videoTitle, channelTitle }) => {
@@ -99,11 +113,7 @@ io.on('connection', (socket) => {
       room.currentTrack = track;
       room.playbackStartTime = Date.now();
       room.isPlaying = true;
-      io.to(roomCode).emit('play-track', {
-        track,
-        currentTime: 0,
-        serverTimestamp: Date.now()
-      });
+      io.to(roomCode).emit('play-track', { track, currentTime: 0, serverTimestamp: Date.now() });
     } else {
       room.queue.push(track);
     }
@@ -139,14 +149,10 @@ io.on('connection', (socket) => {
     const room = rooms[roomCode];
     if (room && socket.userId === room.hostUserId) {
       room.playbackStartTime = Date.now() - (currentTime * 1000);
-      socket.to(roomCode).emit('sync-time', {
-        currentTime,
-        serverTimestamp: Date.now()
-      });
+      socket.to(roomCode).emit('sync-time', { currentTime, serverTimestamp: Date.now() });
     }
   });
 
-  // WebRTC Signaling Relays
   socket.on('webrtc-offer', ({ targetId, offer }) => io.to(targetId).emit('webrtc-offer', { senderId: socket.id, offer }));
   socket.on('webrtc-answer', ({ targetId, answer }) => io.to(targetId).emit('webrtc-answer', { senderId: socket.id, answer }));
   socket.on('webrtc-ice-candidate', ({ targetId, candidate }) => io.to(targetId).emit('webrtc-ice-candidate', { senderId: socket.id, candidate }));
@@ -157,7 +163,6 @@ io.on('connection', (socket) => {
 
     const room = rooms[roomCode];
     const rider = room.riders[userId];
-
     if (!rider) return;
 
     rider.status = 'reconnecting';
@@ -166,12 +171,10 @@ io.on('connection', (socket) => {
 
     broadcastRoomState(roomCode);
 
-    // 60-Second Grace Period Timer
     rider.disconnectTimeout = setTimeout(() => {
       if (rooms[roomCode] && rooms[roomCode].riders[userId]?.status === 'reconnecting') {
         delete rooms[roomCode].riders[userId];
 
-        // Host transfer to longest connected remaining rider
         if (rooms[roomCode].hostUserId === userId) {
           const remainingRiders = Object.entries(rooms[roomCode].riders)
             .sort(([, a], [, b]) => a.connectedAt - b.connectedAt);
@@ -201,11 +204,7 @@ function playNextTrack(roomCode) {
     room.currentTrack = room.queue.shift();
     room.playbackStartTime = Date.now();
     room.isPlaying = true;
-    io.to(roomCode).emit('play-track', {
-      track: room.currentTrack,
-      currentTime: 0,
-      serverTimestamp: Date.now()
-    });
+    io.to(roomCode).emit('play-track', { track: room.currentTrack, currentTime: 0, serverTimestamp: Date.now() });
   } else {
     room.currentTrack = null;
     room.isPlaying = false;
