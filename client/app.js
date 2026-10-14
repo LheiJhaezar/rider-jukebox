@@ -20,10 +20,12 @@ let hostSyncInterval = null;
 let currentTrack = null;
 let isRideMode = false;
 let wakeLock = null;
+let audioUnlocked = false;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
-  document.getElementById(screenId).classList.add('on');
+  document.getElementById("rejoining-loader").style.display = "none";
+  if (screenId) document.getElementById(screenId).classList.add('on');
 }
 
 function getInitials(name) {
@@ -37,67 +39,43 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. SCREEN WAKE LOCK API (KEEP SCREEN ON WHILE IN RIDE)
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator && !wakeLock) {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch (err) {
-    console.warn("Screen Wake Lock error:", err);
-  }
-}
-
-function releaseWakeLock() {
-  if (wakeLock) {
-    wakeLock.release().then(() => { wakeLock = null; });
-  }
-}
-
-document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && currentRoomCode) {
-    await requestWakeLock();
-  }
-});
-
-// 2. RIDE MODE TOGGLE
-function toggleRideMode() {
-  isRideMode = !isRideMode;
-  const btn = document.getElementById("btn-ridemode");
-  const collapsibleSections = document.querySelectorAll(".collapsible-section");
-
-  if (isRideMode) {
-    btn.innerText = "Exit ride mode";
-    btn.style.background = "var(--lamp)";
-    btn.style.color = "var(--lamp-ink)";
-    collapsibleSections.forEach(s => s.style.display = "none");
-  } else {
-    btn.innerText = "Ride mode";
-    btn.style.background = "var(--lane)";
-    btn.style.color = "var(--line)";
-    collapsibleSections.forEach(s => s.style.display = "flex");
-  }
-}
-
-// 3. AUTO-FILL ROOM FROM SHARE LINK & AUTH RESTORATION
-window.addEventListener('DOMContentLoaded', () => {
+// 1. URL & LOCALSTORAGE SESSION MANAGEMENT
+function getSavedRoomCode() {
   const urlParams = new URLSearchParams(window.location.search);
   const roomFromUrl = urlParams.get('room')?.toUpperCase();
-  if (roomFromUrl && roomFromUrl.length === 6) {
-    const codeInputs = [...document.querySelectorAll('#code input')];
-    codeInputs.forEach((x, j) => x.value = roomFromUrl[j] || '');
-  }
-});
+  if (roomFromUrl && roomFromUrl.length === 6) return roomFromUrl;
+  return localStorage.getItem('rj:lastRoom')?.toUpperCase() || null;
+}
 
-window.supabaseClient.auth.onAuthStateChange((event, session) => {
+function saveRoomSession(code) {
+  localStorage.setItem('rj:lastRoom', code);
+  history.replaceState(null, '', `/?room=${code}`);
+}
+
+function clearRoomSession() {
+  localStorage.removeItem('rj:lastRoom');
+  history.replaceState(null, '', '/');
+}
+
+// 2. AUTHENTICATION RESTORATION
+window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (session) {
     currentUser = session.user;
     const name = currentUser.user_metadata.full_name || currentUser.email;
     document.getElementById("user-display-name").innerText = name;
     document.getElementById("user-avatar").innerText = getInitials(name);
-    switchScreen("s-lobby");
+
+    const savedRoom = getSavedRoomCode();
+    if (savedRoom) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
+      document.getElementById("rejoining-loader").style.display = "block";
+      joinSocketRoom(savedRoom);
+    } else {
+      switchScreen("s-lobby");
+    }
   } else {
     currentUser = null;
+    clearRoomSession();
     switchScreen("s-login");
   }
 });
@@ -105,15 +83,16 @@ window.supabaseClient.auth.onAuthStateChange((event, session) => {
 async function loginWithGoogle() {
   await window.supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin }
+    options: { redirectTo: window.location.href }
   });
 }
 
 async function logout() {
+  clearRoomSession();
   await window.supabaseClient.auth.signOut();
 }
 
-// 4. LOBBY & RECONNECT HANDLING
+// 3. LOBBY & CODE BOXES
 const codeInputs = [...document.querySelectorAll('#code input')];
 codeInputs.forEach((b, i) => {
   b.addEventListener('input', () => {
@@ -143,26 +122,45 @@ function joinLobby() {
 
 function joinSocketRoom(roomCode) {
   currentRoomCode = roomCode;
+  saveRoomSession(roomCode);
+
+  const userId = currentUser ? currentUser.id : "guest";
   const userName = currentUser ? (currentUser.user_metadata.full_name || currentUser.email) : "Rider";
 
-  socket.emit("join-room", { roomCode, userName });
+  socket.emit("join-room", { roomCode, userId, userName });
 
   document.getElementById("display-room-code").innerText = roomCode;
-  document.getElementById("status").innerText = "";
-  switchScreen("s-room");
-  initWebRTC();
-  requestWakeLock();
+  document.getElementById("btn-rejoin-audio").style.display = audioUnlocked ? "none" : "block";
 }
 
+// Socket Connection Status Listeners
 socket.on('connect', () => {
-  if (currentRoomCode) {
-    document.getElementById("status").innerText = "";
+  const statusElem = document.getElementById("status");
+  statusElem.innerText = "Connected";
+  setTimeout(() => {
+    if (statusElem.innerText === "Connected") statusElem.innerText = "";
+  }, 2500);
+
+  if (currentRoomCode && currentUser) {
     joinSocketRoom(currentRoomCode);
   }
 });
 
 socket.on('disconnect', () => {
-  document.getElementById("status").innerText = "Reconnecting...";
+  document.getElementById("status").innerText = "Reconnecting";
+});
+
+window.addEventListener('online', () => {
+  if (!socket.connected) socket.connect();
+});
+
+socket.on('room-not-found', () => {
+  clearRoomSession();
+  currentRoomCode = null;
+  switchScreen("s-lobby");
+  const errElem = document.getElementById("lobby-error-msg");
+  errElem.innerText = "That ride has ended. Create a new lobby or join another.";
+  errElem.style.display = "block";
 });
 
 function copyRoomCode() {
@@ -175,12 +173,24 @@ function copyRoomCode() {
 }
 
 function leaveLobby() {
-  releaseWakeLock();
+  clearRoomSession();
   if (localStream) localStream.getTracks().forEach(track => track.stop());
   location.href = window.location.origin;
 }
 
-// 5. WEBRTC & PUSH-TO-TALK
+// 4. USER GESTURE AUDIO UNLOCK & WEBRTC
+async function rejoinAudioAndMedia() {
+  audioUnlocked = true;
+  document.getElementById("btn-rejoin-audio").style.display = "none";
+
+  if (player && player.playVideo && currentTrack) {
+    player.playVideo();
+  }
+
+  await initWebRTC();
+  requestWakeLock();
+}
+
 async function initWebRTC() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -265,7 +275,63 @@ const setTalkingState = (isTalking) => {
 ['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
 ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 
-// 6. PLAYER & QUEUE SYNC
+// 5. FULL ROOM STATE RESTORATION & SYNC
+socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
+  switchScreen("s-room");
+
+  if (track) {
+    currentTrack = track;
+    document.getElementById("np-title").innerText = track.title;
+    document.getElementById("np-by").innerText = `${track.channel} — added by ${track.addedBy}`;
+    const placeholder = document.getElementById("ph");
+    if (placeholder) placeholder.style.display = "none";
+
+    const latencyOffset = (Date.now() - serverTimestamp) / 1000;
+    const adjustedPosition = currentPosition + latencyOffset;
+
+    if (player && player.loadVideoById) {
+      player.loadVideoById(track.id, adjustedPosition);
+      if (!audioUnlocked) player.pauseVideo();
+    }
+  }
+});
+
+socket.on('room-state-update', (state) => {
+  isHost = state.hostUserId === (currentUser ? currentUser.id : null);
+
+  document.getElementById('riders').innerHTML = state.riders.map(r => `
+    <div class="rider" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
+      <div class="avatar">${getInitials(r.name)}</div>
+      ${r.name.split(" ")[0]}
+      <span style="font-size:10px; color:var(--dim);">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : '')}</span>
+    </div>
+  `).join('');
+
+  const skipBtn = document.getElementById('btn-skip');
+  if (state.currentTrack) {
+    skipBtn.style.display = 'block';
+    skipBtn.innerText = isHost ? 'Skip (Host)' : `Skip (${state.skipVotes}/${state.votesNeeded})`;
+  } else {
+    skipBtn.style.display = 'none';
+  }
+
+  const queueContainer = document.getElementById('queue');
+  if (state.queue.length > 0) {
+    queueContainer.innerHTML = state.queue.map(t => `
+      <div class="item">
+        <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
+        <div class="meta">
+          <div class="t">${t.title}</div>
+          <div class="s">${t.channel} — added by ${t.addedBy}</div>
+        </div>
+      </div>
+    `).join('');
+  } else {
+    queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
+  }
+});
+
+// 6. PLAYER CONTROLS
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -294,60 +360,19 @@ setInterval(() => {
   }
 }, 1000);
 
-socket.on('room-state-update', (state) => {
-  isHost = state.hostId === socket.id;
-
-  document.getElementById('riders').innerHTML = state.riders.map(r => `
-    <div class="rider">
-      <div class="avatar">${getInitials(r.name)}</div>
-      ${r.name.split(" ")[0]}${r.isHost ? ' (Host)' : ''}
-    </div>
-  `).join('');
-
-  const skipBtn = document.getElementById('btn-skip');
-  if (state.currentTrack) {
-    skipBtn.style.display = 'block';
-    skipBtn.innerText = isHost ? 'Skip (Host)' : `Skip (${state.skipVotes}/${state.votesNeeded})`;
-  } else {
-    skipBtn.style.display = 'none';
-  }
-
-  const queueContainer = document.getElementById('queue');
-  if (state.queue.length > 0) {
-    queueContainer.innerHTML = state.queue.map(t => `
-      <div class="item">
-        <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
-        <div class="meta">
-          <div class="t">${t.title}</div>
-          <div class="s">${t.channel} — added by ${t.addedBy}</div>
-        </div>
-      </div>
-    `).join('');
-  } else {
-    queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
-  }
-
-  if (isHost && !hostSyncInterval) {
-    hostSyncInterval = setInterval(() => {
-      if (player && player.getCurrentTime) {
-        socket.emit('host-time-sync', { roomCode: currentRoomCode, currentTime: player.getCurrentTime() });
-      }
-    }, 4000);
-  } else if (!isHost && hostSyncInterval) {
-    clearInterval(hostSyncInterval);
-    hostSyncInterval = null;
-  }
-});
-
-socket.on('play-track', ({ track, currentTime }) => {
+socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
   currentTrack = track;
   document.getElementById("np-title").innerText = track.title;
   document.getElementById("np-by").innerText = `${track.channel} — added by ${track.addedBy}`;
   const placeholder = document.getElementById("ph");
   if (placeholder) placeholder.style.display = "none";
 
+  const latencyOffset = (Date.now() - serverTimestamp) / 1000;
+  const adjustedTime = currentTime + latencyOffset;
+
   if (player && player.loadVideoById) {
-    player.loadVideoById(track.id, currentTime);
+    player.loadVideoById(track.id, adjustedTime);
+    if (!audioUnlocked) player.pauseVideo();
   }
 });
 
@@ -362,11 +387,12 @@ socket.on('queue-empty', () => {
   if (placeholder) placeholder.style.display = "grid";
 });
 
-socket.on('sync-time', ({ currentTime }) => {
+socket.on('sync-time', ({ currentTime, serverTimestamp }) => {
   if (!isHost && player && player.getCurrentTime) {
-    const clientTime = player.getCurrentTime();
-    if (Math.abs(clientTime - currentTime) > 1.5) {
-      player.seekTo(currentTime, true);
+    const latencyOffset = (Date.now() - serverTimestamp) / 1000;
+    const targetTime = currentTime + latencyOffset;
+    if (Math.abs(player.getCurrentTime() - targetTime) > 1.5) {
+      player.seekTo(targetTime, true);
     }
   }
 });
@@ -377,7 +403,7 @@ function voteSkip() {
   }
 }
 
-// 7. YOUTUBE SEARCH & RATE LIMITING
+// 7. YOUTUBE SEARCH
 async function searchYouTube() {
   const query = document.getElementById("q").value.trim();
   if (!query) return;
@@ -415,4 +441,32 @@ function addToQueue(videoId, videoTitle, channelTitle, btn) {
     btn.textContent = "Added";
   }
   socket.emit("add-to-queue", { roomCode: currentRoomCode, videoId, videoTitle, channelTitle });
+}
+
+function toggleRideMode() {
+  isRideMode = !isRideMode;
+  const btn = document.getElementById("btn-ridemode");
+  const collapsibleSections = document.querySelectorAll(".collapsible-section");
+
+  if (isRideMode) {
+    btn.innerText = "Exit ride mode";
+    btn.style.background = "var(--lamp)";
+    btn.style.color = "var(--lamp-ink)";
+    collapsibleSections.forEach(s => s.style.display = "none");
+  } else {
+    btn.innerText = "Ride mode";
+    btn.style.background = "var(--lane)";
+    btn.style.color = "var(--line)";
+    collapsibleSections.forEach(s => s.style.display = "flex");
+  }
+}
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (err) {
+    console.warn("Screen Wake Lock error:", err);
+  }
 }

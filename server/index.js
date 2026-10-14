@@ -13,10 +13,7 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// In-memory room state
 const rooms = {};
-
-// Cache YouTube searches to conserve API quota
 const searchCache = new Map();
 
 app.get('/api/search-youtube', async (req, res) => {
@@ -41,15 +38,19 @@ app.get('/api/search-youtube', async (req, res) => {
 });
 
 io.on('connection', (socket) => {
-  socket.on('join-room', ({ roomCode, userName }) => {
-    socket.join(roomCode);
+  socket.on('join-room', ({ roomCode, userId, userName }) => {
+    if (!roomCode || !userId) return;
+
     socket.roomCode = roomCode;
+    socket.userId = userId;
     socket.userName = userName;
 
     if (!rooms[roomCode]) {
       rooms[roomCode] = {
-        hostId: socket.id,
+        hostUserId: userId,
         currentTrack: null,
+        playbackStartTime: 0,
+        isPlaying: false,
         queue: [],
         skipVotes: new Set(),
         riders: {}
@@ -57,12 +58,29 @@ io.on('connection', (socket) => {
     }
 
     const room = rooms[roomCode];
-    room.riders[socket.id] = { name: userName, isHost: room.hostId === socket.id };
 
-    // WebRTC connection signaling to other riders
-    socket.to(roomCode).emit('user-joined-webrtc', { socketId: socket.id });
+    // Clear reconnect timer if rider was in grace period
+    if (room.riders[userId] && room.riders[userId].disconnectTimeout) {
+      clearTimeout(room.riders[userId].disconnectTimeout);
+      room.riders[userId].disconnectTimeout = null;
+    }
 
-    // Send updated room state to all clients in room
+    room.riders[userId] = {
+      socketId: socket.id,
+      name: userName,
+      isHost: room.hostUserId === userId,
+      status: 'connected',
+      connectedAt: room.riders[userId]?.connectedAt || Date.now(),
+      disconnectTimeout: null
+    };
+
+    socket.join(roomCode);
+
+    // Notify other active peers to re-establish WebRTC P2P voice
+    socket.to(roomCode).emit('user-joined-webrtc', { socketId: socket.id, userId });
+
+    // Send full current room state & server timestamp to joining client
+    sendFullRoomState(socket, roomCode);
     broadcastRoomState(roomCode);
   });
 
@@ -79,7 +97,13 @@ io.on('connection', (socket) => {
 
     if (!room.currentTrack) {
       room.currentTrack = track;
-      io.to(roomCode).emit('play-track', { track, currentTime: 0 });
+      room.playbackStartTime = Date.now();
+      room.isPlaying = true;
+      io.to(roomCode).emit('play-track', {
+        track,
+        currentTime: 0,
+        serverTimestamp: Date.now()
+      });
     } else {
       room.queue.push(track);
     }
@@ -91,11 +115,11 @@ io.on('connection', (socket) => {
     const room = rooms[roomCode];
     if (!room || !room.currentTrack) return;
 
-    const isHost = room.hostId === socket.id;
-    room.skipVotes.add(socket.id);
+    const isHost = room.hostUserId === socket.userId;
+    room.skipVotes.add(socket.userId);
 
-    const riderCount = Object.keys(room.riders).length;
-    const votesNeeded = Math.ceil(riderCount / 2);
+    const activeRidersCount = Object.values(room.riders).filter(r => r.status === 'connected').length;
+    const votesNeeded = Math.ceil(activeRidersCount / 2);
 
     if (isHost || room.skipVotes.size >= votesNeeded) {
       playNextTrack(roomCode);
@@ -106,13 +130,20 @@ io.on('connection', (socket) => {
 
   socket.on('track-ended', ({ roomCode }) => {
     const room = rooms[roomCode];
-    if (room && socket.id === room.hostId) {
+    if (room && socket.userId === room.hostUserId) {
       playNextTrack(roomCode);
     }
   });
 
   socket.on('host-time-sync', ({ roomCode, currentTime }) => {
-    socket.to(roomCode).emit('sync-time', { currentTime });
+    const room = rooms[roomCode];
+    if (room && socket.userId === room.hostUserId) {
+      room.playbackStartTime = Date.now() - (currentTime * 1000);
+      socket.to(roomCode).emit('sync-time', {
+        currentTime,
+        serverTimestamp: Date.now()
+      });
+    }
   });
 
   // WebRTC Signaling Relays
@@ -121,28 +152,42 @@ io.on('connection', (socket) => {
   socket.on('webrtc-ice-candidate', ({ targetId, candidate }) => io.to(targetId).emit('webrtc-ice-candidate', { senderId: socket.id, candidate }));
 
   socket.on('disconnect', () => {
-    const roomCode = socket.roomCode;
-    if (!roomCode || !rooms[roomCode]) return;
+    const { roomCode, userId } = socket;
+    if (!roomCode || !rooms[roomCode] || !userId) return;
 
     const room = rooms[roomCode];
-    delete room.riders[socket.id];
-    room.skipVotes.delete(socket.id);
+    const rider = room.riders[userId];
 
+    if (!rider) return;
+
+    rider.status = 'reconnecting';
+    room.skipVotes.delete(userId);
     io.to(roomCode).emit('user-disconnected-webrtc', { socketId: socket.id });
 
-    // Host transfer if current host leaves
-    if (room.hostId === socket.id) {
-      const remainingSocketIds = Object.keys(room.riders);
-      if (remainingSocketIds.length > 0) {
-        room.hostId = remainingSocketIds[0];
-        room.riders[room.hostId].isHost = true;
-      } else {
-        delete rooms[roomCode];
-        return;
-      }
-    }
-
     broadcastRoomState(roomCode);
+
+    // 60-Second Grace Period Timer
+    rider.disconnectTimeout = setTimeout(() => {
+      if (rooms[roomCode] && rooms[roomCode].riders[userId]?.status === 'reconnecting') {
+        delete rooms[roomCode].riders[userId];
+
+        // Host transfer to longest connected remaining rider
+        if (rooms[roomCode].hostUserId === userId) {
+          const remainingRiders = Object.entries(rooms[roomCode].riders)
+            .sort(([, a], [, b]) => a.connectedAt - b.connectedAt);
+
+          if (remainingRiders.length > 0) {
+            const [newHostUserId, newHostData] = remainingRiders[0];
+            rooms[roomCode].hostUserId = newHostUserId;
+            newHostData.isHost = true;
+          } else {
+            delete rooms[roomCode];
+            return;
+          }
+        }
+        broadcastRoomState(roomCode);
+      }
+    }, 60000);
   });
 });
 
@@ -154,30 +199,58 @@ function playNextTrack(roomCode) {
 
   if (room.queue.length > 0) {
     room.currentTrack = room.queue.shift();
-    io.to(roomCode).emit('play-track', { track: room.currentTrack, currentTime: 0 });
+    room.playbackStartTime = Date.now();
+    room.isPlaying = true;
+    io.to(roomCode).emit('play-track', {
+      track: room.currentTrack,
+      currentTime: 0,
+      serverTimestamp: Date.now()
+    });
   } else {
     room.currentTrack = null;
+    room.isPlaying = false;
     io.to(roomCode).emit('queue-empty');
   }
 
   broadcastRoomState(roomCode);
 }
 
+function sendFullRoomState(socket, roomCode) {
+  const room = rooms[roomCode];
+  if (!room) return socket.emit('room-not-found');
+
+  let currentPosition = 0;
+  if (room.currentTrack && room.playbackStartTime > 0) {
+    currentPosition = (Date.now() - room.playbackStartTime) / 1000;
+  }
+
+  socket.emit('full-room-state', {
+    roomCode,
+    hostUserId: room.hostUserId,
+    currentTrack: room.currentTrack,
+    currentPosition,
+    isPlaying: room.isPlaying,
+    queue: room.queue,
+    serverTimestamp: Date.now()
+  });
+}
+
 function broadcastRoomState(roomCode) {
   const room = rooms[roomCode];
   if (!room) return;
 
-  const riderList = Object.entries(room.riders).map(([id, info]) => ({
-    id,
+  const riderList = Object.entries(room.riders).map(([uId, info]) => ({
+    userId: uId,
     name: info.name,
-    isHost: info.isHost
+    isHost: info.isHost,
+    status: info.status
   }));
 
-  const totalRiders = riderList.length;
-  const votesNeeded = Math.ceil(totalRiders / 2);
+  const activeRiders = riderList.filter(r => r.status === 'connected');
+  const votesNeeded = Math.ceil(activeRiders.length / 2);
 
   io.to(roomCode).emit('room-state-update', {
-    hostId: room.hostId,
+    hostUserId: room.hostUserId,
     riders: riderList,
     currentTrack: room.currentTrack,
     queue: room.queue,
@@ -187,4 +260,4 @@ function broadcastRoomState(roomCode) {
 }
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
