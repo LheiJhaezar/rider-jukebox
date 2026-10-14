@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Place your anon key here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Paste your actual anon key string here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -36,8 +36,12 @@ let bannerTimeout = null;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
-  document.getElementById("rejoining-loader").style.display = "none";
-  if (screenId) document.getElementById(screenId).classList.add('on');
+  const loader = document.getElementById("rejoining-loader");
+  if (loader) loader.style.display = "none";
+  if (screenId) {
+    const target = document.getElementById(screenId);
+    if (target) target.classList.add('on');
+  }
 }
 
 function getInitials(name) {
@@ -98,13 +102,14 @@ socket.on('receive-quick-signal', ({ senderName, signalType }) => {
   const banner = document.getElementById('signal-banner');
   const bannerText = document.getElementById('signal-text');
 
-  bannerText.innerText = `${senderName.split(" ")[0]}: ${signalType}`;
-  banner.style.display = 'block';
+  if (bannerText && banner) {
+    bannerText.innerText = `${senderName.split(" ")[0]}: ${signalType}`;
+    banner.style.display = 'block';
+  }
 
   playSynthesizedChime();
 
-  // Duck music during chime
-  if (player && player.setVolume) {
+  if (player && player.setVolume && player.getVolume) {
     baseMusicVolume = player.getVolume() || 100;
     player.setVolume(Math.round(baseMusicVolume * 0.2));
     setTimeout(() => {
@@ -114,7 +119,7 @@ socket.on('receive-quick-signal', ({ senderName, signalType }) => {
 
   if (bannerTimeout) clearTimeout(bannerTimeout);
   bannerTimeout = setTimeout(() => {
-    banner.style.display = 'none';
+    if (banner) banner.style.display = 'none';
   }, 5000);
 });
 
@@ -233,13 +238,16 @@ window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
   if (session) {
     currentUser = session.user;
     const name = currentUser.user_metadata.full_name || currentUser.email;
-    document.getElementById("user-display-name").innerText = name;
-    document.getElementById("user-avatar").innerText = getInitials(name);
+    const nameElem = document.getElementById("user-display-name");
+    const avatarElem = document.getElementById("user-avatar");
+    if (nameElem) nameElem.innerText = name;
+    if (avatarElem) avatarElem.innerText = getInitials(name);
 
     const savedRoom = getSavedRoomCode();
     if (savedRoom) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
-      document.getElementById("rejoining-loader").style.display = "block";
+      const loader = document.getElementById("rejoining-loader");
+      if (loader) loader.style.display = "block";
       joinSocketRoom(savedRoom);
     } else {
       switchScreen("s-lobby");
@@ -309,10 +317,12 @@ function joinSocketRoom(roomCode) {
 
 socket.on('connect', () => {
   const statusElem = document.getElementById("status");
-  statusElem.innerText = "Connected";
-  setTimeout(() => {
-    if (statusElem.innerText === "Connected") statusElem.innerText = "";
-  }, 2500);
+  if (statusElem) {
+    statusElem.innerText = "Connected";
+    setTimeout(() => {
+      if (statusElem.innerText === "Connected") statusElem.innerText = "";
+    }, 2500);
+  }
 
   if (currentRoomCode && currentUser) {
     joinSocketRoom(currentRoomCode);
@@ -320,7 +330,8 @@ socket.on('connect', () => {
 });
 
 socket.on('disconnect', () => {
-  document.getElementById("status").innerText = "Reconnecting";
+  const statusElem = document.getElementById("status");
+  if (statusElem) statusElem.innerText = "Reconnecting";
 });
 
 window.addEventListener('online', () => {
@@ -332,8 +343,10 @@ socket.on('room-not-found', () => {
   currentRoomCode = null;
   switchScreen("s-lobby");
   const errElem = document.getElementById("lobby-error-msg");
-  errElem.innerText = "That ride has ended. Create a new lobby or join another.";
-  errElem.style.display = "block";
+  if (errElem) {
+    errElem.innerText = "That ride has ended. Create a new lobby or join another.";
+    errElem.style.display = "block";
+  }
 });
 
 function copyRoomCode() {
@@ -341,8 +354,10 @@ function copyRoomCode() {
   const shareUrl = `${window.location.origin}/?room=${currentRoomCode}`;
   navigator.clipboard?.writeText(shareUrl);
   const span = document.querySelector('#copy span');
-  span.textContent = 'Link copied';
-  setTimeout(() => span.textContent = 'Tap to copy link', 1500);
+  if (span) {
+    span.textContent = 'Link copied';
+    setTimeout(() => span.textContent = 'Tap to copy link', 1500);
+  }
 }
 
 function leaveLobby() {
@@ -355,7 +370,8 @@ function leaveLobby() {
 // 4. WEBRTC & PUSH-TO-TALK
 async function rejoinAudioAndMedia() {
   audioUnlocked = true;
-  document.getElementById("btn-rejoin-audio").style.display = "none";
+  const rejoinBtn = document.getElementById("btn-rejoin-audio");
+  if (rejoinBtn) rejoinBtn.style.display = "none";
 
   initAudioContext();
 
@@ -376,7 +392,7 @@ async function initWebRTC() {
       attachAudioAnalyser(currentUser.id, localStream);
     }
   } catch (err) {
-    console.warn("Microphone unavailable:", err);
+    console.warn("Microphone access declined or delayed:", err);
   }
 
   socket.on("user-joined-webrtc", ({ socketId, userId }) => createPeerConnection(socketId, userId, true));
@@ -428,7 +444,8 @@ function createPeerConnection(targetSocketId, userId, isInitiator) {
       remoteAudio = document.createElement("audio");
       remoteAudio.id = `audio-${targetSocketId}`;
       remoteAudio.autoplay = true;
-      document.getElementById("audio-streams").appendChild(remoteAudio);
+      const audioContainer = document.getElementById("audio-streams");
+      if (audioContainer) audioContainer.appendChild(remoteAudio);
     }
     remoteAudio.srcObject = event.streams[0];
     attachAudioAnalyser(userId, event.streams[0]);
@@ -445,17 +462,35 @@ function createPeerConnection(targetSocketId, userId, isInitiator) {
 }
 
 const talkBtn = document.getElementById('talk');
-const setTalkingState = (isTalking) => {
-  if (!localStream || !localStream.getAudioTracks()[0]) return;
-  localStream.getAudioTracks()[0].enabled = isTalking;
-  talkBtn.classList.toggle('live', isTalking);
-  talkBtn.setAttribute('aria-pressed', isTalking);
-  talkBtn.textContent = isTalking ? 'Talking' : 'Hold to talk';
-  document.getElementById('mic-note').textContent = isTalking ? 'Everyone can hear you' : 'Mic is off';
+
+const setTalkingState = async (isTalking) => {
+  initAudioContext();
+
+  // Request mic permissions on tap if localStream was not initialized yet
+  if (!localStream || !localStream.getAudioTracks()[0]) {
+    await initWebRTC();
+  }
+
+  if (localStream && localStream.getAudioTracks()[0]) {
+    localStream.getAudioTracks()[0].enabled = isTalking;
+  }
+
+  if (talkBtn) {
+    talkBtn.classList.toggle('live', isTalking);
+    talkBtn.setAttribute('aria-pressed', isTalking);
+    talkBtn.textContent = isTalking ? 'Talking' : 'Hold to talk';
+  }
+
+  const micNote = document.getElementById('mic-note');
+  if (micNote) {
+    micNote.textContent = isTalking ? 'Everyone can hear you' : 'Mic is off';
+  }
 };
 
-['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
-['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
+if (talkBtn) {
+  ['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
+}
 
 // 5. ROOM STATE RESTORATION
 socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
@@ -463,8 +498,11 @@ socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, curre
 
   if (track) {
     currentTrack = track;
-    document.getElementById("np-title").innerText = track.title;
-    document.getElementById("np-by").innerText = `${track.channel} — added by ${track.addedBy}`;
+    const titleElem = document.getElementById("np-title");
+    const byElem = document.getElementById("np-by");
+    if (titleElem) titleElem.innerText = track.title;
+    if (byElem) byElem.innerText = `${track.channel} — added by ${track.addedBy}`;
+
     const placeholder = document.getElementById("ph");
     if (placeholder) placeholder.style.display = "none";
 
@@ -481,35 +519,42 @@ socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, curre
 socket.on('room-state-update', (state) => {
   isHost = state.hostUserId === (currentUser ? currentUser.id : null);
 
-  document.getElementById('riders').innerHTML = state.riders.map(r => `
-    <div class="rider" data-user-id="${r.userId}" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
-      <div class="avatar">${getInitials(r.name)}</div>
-      ${r.name.split(" ")[0]}
-      <span style="font-size:10px; color:var(--dim);">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : '')}</span>
-    </div>
-  `).join('');
+  const ridersContainer = document.getElementById('riders');
+  if (ridersContainer) {
+    ridersContainer.innerHTML = state.riders.map(r => `
+      <div class="rider" data-user-id="${r.userId}" style="${r.status === 'reconnecting' ? 'opacity:0.5;' : ''}">
+        <div class="avatar">${getInitials(r.name)}</div>
+        ${r.name.split(" ")[0]}
+        <span style="font-size:10px; color:var(--dim);">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : '')}</span>
+      </div>
+    `).join('');
+  }
 
   const skipBtn = document.getElementById('btn-skip');
-  if (state.currentTrack) {
-    skipBtn.style.display = 'block';
-    skipBtn.innerText = isHost ? 'Skip (Host)' : `Skip (${state.skipVotes}/${state.votesNeeded})`;
-  } else {
-    skipBtn.style.display = 'none';
+  if (skipBtn) {
+    if (state.currentTrack) {
+      skipBtn.style.display = 'block';
+      skipBtn.innerText = isHost ? 'Skip (Host)' : `Skip (${state.skipVotes}/${state.votesNeeded})`;
+    } else {
+      skipBtn.style.display = 'none';
+    }
   }
 
   const queueContainer = document.getElementById('queue');
-  if (state.queue.length > 0) {
-    queueContainer.innerHTML = state.queue.map(t => `
-      <div class="item">
-        <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
-        <div class="meta">
-          <div class="t">${t.title}</div>
-          <div class="s">${t.channel} — added by ${t.addedBy}</div>
+  if (queueContainer) {
+    if (state.queue.length > 0) {
+      queueContainer.innerHTML = state.queue.map(t => `
+        <div class="item">
+          <div class="thumb" style="background-image: url('https://img.youtube.com/vi/${t.id}/hqdefault.jpg')"></div>
+          <div class="meta">
+            <div class="t">${t.title}</div>
+            <div class="s">${t.channel} — added by ${t.addedBy}</div>
+          </div>
         </div>
-      </div>
-    `).join('');
-  } else {
-    queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
+      `).join('');
+    } else {
+      queueContainer.innerHTML = '<div class="empty">Nothing queued.</div>';
+    }
   }
 });
 
@@ -535,17 +580,23 @@ setInterval(() => {
     const cur = player.getCurrentTime();
     const dur = player.getDuration();
     if (dur > 0) {
-      document.getElementById('t-now').innerText = fmt(cur);
-      document.getElementById('t-len').innerText = fmt(dur);
-      document.getElementById('bar').style.width = (cur / dur * 100) + '%';
+      const nowElem = document.getElementById('t-now');
+      const lenElem = document.getElementById('t-len');
+      const barElem = document.getElementById('bar');
+      if (nowElem) nowElem.innerText = fmt(cur);
+      if (lenElem) lenElem.innerText = fmt(dur);
+      if (barElem) barElem.style.width = (cur / dur * 100) + '%';
     }
   }
 }, 1000);
 
 socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
   currentTrack = track;
-  document.getElementById("np-title").innerText = track.title;
-  document.getElementById("np-by").innerText = `${track.channel} — added by ${track.addedBy}`;
+  const titleElem = document.getElementById("np-title");
+  const byElem = document.getElementById("np-by");
+  if (titleElem) titleElem.innerText = track.title;
+  if (byElem) byElem.innerText = `${track.channel} — added by ${track.addedBy}`;
+
   const placeholder = document.getElementById("ph");
   if (placeholder) placeholder.style.display = "none";
 
@@ -560,11 +611,18 @@ socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
 
 socket.on('queue-empty', () => {
   currentTrack = null;
-  document.getElementById("np-title").innerText = "Queue is empty";
-  document.getElementById("np-by").innerText = "Add the first song below";
-  document.getElementById("bar").style.width = '0%';
-  document.getElementById("t-now").innerText = "0:00";
-  document.getElementById("t-len").innerText = "0:00";
+  const titleElem = document.getElementById("np-title");
+  const byElem = document.getElementById("np-by");
+  const barElem = document.getElementById("bar");
+  const nowElem = document.getElementById("t-now");
+  const lenElem = document.getElementById("t-len");
+
+  if (titleElem) titleElem.innerText = "Queue is empty";
+  if (byElem) byElem.innerText = "Add the first song below";
+  if (barElem) barElem.style.width = '0%';
+  if (nowElem) nowElem.innerText = "0:00";
+  if (lenElem) lenElem.innerText = "0:00";
+
   const placeholder = document.getElementById("ph");
   if (placeholder) placeholder.style.display = "grid";
 });
@@ -597,6 +655,7 @@ async function searchYouTube() {
     if (data.error) return alert(data.error);
 
     const resultsContainer = document.getElementById("results");
+    if (!resultsContainer) return;
     resultsContainer.innerHTML = "";
 
     data.forEach(video => {
@@ -631,14 +690,18 @@ function toggleRideMode() {
   const collapsibleSections = document.querySelectorAll(".collapsible-section");
 
   if (isRideMode) {
-    btn.innerText = "Exit ride mode";
-    btn.style.background = "var(--lamp)";
-    btn.style.color = "var(--lamp-ink)";
+    if (btn) {
+      btn.innerText = "Exit ride mode";
+      btn.style.background = "var(--lamp)";
+      btn.style.color = "var(--lamp-ink)";
+    }
     collapsibleSections.forEach(s => s.style.display = "none");
   } else {
-    btn.innerText = "Ride mode";
-    btn.style.background = "var(--lane)";
-    btn.style.color = "var(--line)";
+    if (btn) {
+      btn.innerText = "Ride mode";
+      btn.style.background = "var(--lane)";
+      btn.style.color = "var(--line)";
+    }
     collapsibleSections.forEach(s => s.style.display = "flex");
   }
 }

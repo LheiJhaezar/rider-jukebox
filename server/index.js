@@ -81,7 +81,6 @@ io.on('connection', (socket) => {
     broadcastRoomState(roomCode);
   });
 
-  // Quick Signal Event with 3s Rate Limiter
   socket.on('send-quick-signal', ({ roomCode, signalType }) => {
     const room = rooms[roomCode];
     if (!room || !room.riders[socket.userId]) return;
@@ -89,7 +88,7 @@ io.on('connection', (socket) => {
     const rider = room.riders[socket.userId];
     const now = Date.now();
 
-    if (now - (rider.lastSignalTime || 0) < 3000) return; // 3-second cooldown
+    if (now - (rider.lastSignalTime || 0) < 3000) return;
 
     rider.lastSignalTime = now;
     io.to(roomCode).emit('receive-quick-signal', {
