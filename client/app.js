@@ -425,6 +425,19 @@ function leaveLobby() {
 }
 
 // ===== 6. VOICE (WebRTC) =====
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun3.l.google.com:19302" },
+  { urls: "stun:stun4.l.google.com:19302" }
+];
+
+const pendingIce = {};
+const peerUser = {};
+let micPromise = null;
+let wantTalk = false;
+
 function getMic() {
   if (localStream) return Promise.resolve(localStream);
   if (micPromise) return micPromise;
@@ -434,7 +447,7 @@ function getMic() {
     .then(stream => {
       localStream = stream;
       const track = stream.getAudioTracks()[0];
-      track.enabled = wantTalk;
+      if (track) track.enabled = wantTalk;
       if (currentUser) attachAudioAnalyser(currentUser.id, stream);
       Object.values(peerConnections).forEach(attachMicToPeer);
       return stream;
@@ -442,7 +455,6 @@ function getMic() {
     .catch(err => {
       micPromise = null;
       console.warn("Microphone unavailable (receive-only mode active):", err.name, err.message);
-      // Return null instead of throwing so peer connections can still negotiate audio input from remote riders
       return null;
     });
   return micPromise;
@@ -450,7 +462,9 @@ function getMic() {
 
 function attachMicToPeer(pc) {
   const track = localStream && localStream.getAudioTracks()[0];
-  if (track && pc._sender) pc._sender.replaceTrack(track).catch(e => console.warn("replaceTrack failed", e));
+  if (track && pc._sender) {
+    pc._sender.replaceTrack(track).catch(e => console.warn("replaceTrack failed", e));
+  }
 }
 
 function closePeer(remoteId) {
@@ -499,9 +513,10 @@ function createPeer(remoteId, remoteUserId) {
 
 async function callPeer(remoteId, remoteUserId) {
   const pc = createPeer(remoteId, remoteUserId);
-  const tx = pc.addTransceiver("audio", { direction: "sendrecv" });
+  const direction = localStream ? "sendrecv" : "recvonly";
+  const tx = pc.addTransceiver("audio", { direction });
   pc._sender = tx.sender;
-  attachMicToPeer(pc);
+  if (localStream) attachMicToPeer(pc);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   socket.emit("webrtc-offer", { targetId: remoteId, offer: pc.localDescription });
@@ -523,7 +538,11 @@ socket.on("webrtc-offer", async ({ senderId, senderUserId, offer }) => {
     const pc = createPeer(senderId, senderUserId || senderId);
     await pc.setRemoteDescription(offer);
     const tx = pc.getTransceivers().find(t => t.receiver && t.receiver.track && t.receiver.track.kind === "audio");
-    if (tx) { tx.direction = "sendrecv"; pc._sender = tx.sender; attachMicToPeer(pc); }
+    if (tx) { 
+      tx.direction = localStream ? "sendrecv" : "recvonly"; 
+      pc._sender = tx.sender; 
+      if (localStream) attachMicToPeer(pc); 
+    }
     await flushIce(senderId);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
