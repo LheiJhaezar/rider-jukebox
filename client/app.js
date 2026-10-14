@@ -441,8 +441,9 @@ function getMic() {
     })
     .catch(err => {
       micPromise = null;
-      console.warn("Microphone unavailable:", err.name, err.message);
-      throw err;
+      console.warn("Microphone unavailable (receive-only mode active):", err.name, err.message);
+      // Return null instead of throwing so peer connections can still negotiate audio input from remote riders
+      return null;
     });
   return micPromise;
 }
