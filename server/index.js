@@ -120,6 +120,17 @@ io.on('connection', (socket) => {
     broadcastRoomState(roomCode);
   });
 
+  // Handler for Queue Removal
+  socket.on('remove-queue-item', ({ roomCode, index }) => {
+    const room = rooms[roomCode];
+    if (!room || !room.queue[index]) return;
+    const isHost = room.hostUserId === socket.userId;
+    if (isHost || room.queue[index].addedBy === socket.userName) {
+      room.queue.splice(index, 1);
+      broadcastRoomState(roomCode);
+    }
+  });
+
   socket.on('vote-skip', ({ roomCode }) => {
     const room = rooms[roomCode];
     if (!room || !room.currentTrack) return;
@@ -152,9 +163,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('webrtc-offer', ({ targetId, offer }) => io.to(targetId).emit('webrtc-offer', { senderId: socket.id, offer }));
-  socket.on('webrtc-answer', ({ targetId, answer }) => io.to(targetId).emit('webrtc-answer', { senderId: socket.id, answer }));
-  socket.on('webrtc-ice-candidate', ({ targetId, candidate }) => io.to(targetId).emit('webrtc-ice-candidate', { senderId: socket.id, candidate }));
+  // WebRTC Relay Handlers with Sender User ID
+  socket.on('webrtc-offer', ({ targetId, offer }) =>
+    io.to(targetId).emit('webrtc-offer', { senderId: socket.id, senderUserId: socket.userId, offer }));
+  socket.on('webrtc-answer', ({ targetId, answer }) =>
+    io.to(targetId).emit('webrtc-answer', { senderId: socket.id, answer }));
+  socket.on('webrtc-ice-candidate', ({ targetId, candidate }) =>
+    io.to(targetId).emit('webrtc-ice-candidate', { senderId: socket.id, candidate }));
 
   socket.on('disconnect', () => {
     const { roomCode, userId } = socket;

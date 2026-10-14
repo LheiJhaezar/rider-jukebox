@@ -23,7 +23,7 @@ let hostSyncInterval = null;
 let currentTrack = null;
 let audioUnlocked = false;
 
-// Web Audio API & Ducking
+// Web Audio & Talking Cues
 let audioCtx = null;
 let audioAnalysers = {};
 let audioAnimFrame = null;
@@ -33,12 +33,19 @@ let isDucked = false;
 let duckTimeout = null;
 let toastTimeout = null;
 
-// Local Talking State Tracking
-let activeTalkers = new Map(); // Keyed by userId -> userName
-let isLocalTalker = false;
-
-// Mic Check Test State
+let activeTalkers = new Map();
 let micTestObj = null;
+
+// ===== VOICE (WebRTC) CONFIG & STATE =====
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" }
+  // Optional TURN Server can be added here for mobile network traversal
+];
+
+const pendingIce = {};
+const peerUser = {};
+let micPromise = null;
+let wantTalk = false;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
@@ -152,7 +159,6 @@ function processAudioVolumes() {
     }
   });
 
-  // Update Talk Bar Text & Cues
   const talkBar = document.getElementById('talkbar');
   const talkText = document.getElementById('talktext');
   if (talkBar && talkText) {
@@ -166,7 +172,6 @@ function processAudioVolumes() {
     }
   }
 
-  // Smooth Music Ducking
   const enableDucking = document.getElementById("chk-ducking")?.checked;
   if (enableDucking) {
     if (anyRiderTalking) {
@@ -404,126 +409,164 @@ function leaveLobby() {
   location.href = window.location.origin;
 }
 
-// 6. WEBRTC & PUSH-TO-TALK
-async function rejoinAudioAndMedia() {
-  audioUnlocked = true;
-  const rejoinBtn = document.getElementById("btn-rejoin-audio");
-  if (rejoinBtn) rejoinBtn.style.display = "none";
-
+// ===== 6. VOICE (WebRTC) =====
+function getMic() {
+  if (localStream) return Promise.resolve(localStream);
+  if (micPromise) return micPromise;
   initAudioContext();
-
-  if (player && player.playVideo && currentTrack) {
-    player.playVideo();
-  }
-
-  await initWebRTC();
+  micPromise = navigator.mediaDevices
+    .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false })
+    .then(stream => {
+      localStream = stream;
+      const track = stream.getAudioTracks()[0];
+      track.enabled = wantTalk;
+      if (currentUser) attachAudioAnalyser(currentUser.id, stream);
+      Object.values(peerConnections).forEach(attachMicToPeer);
+      return stream;
+    })
+    .catch(err => {
+      micPromise = null;
+      console.warn("Microphone unavailable:", err.name, err.message);
+      throw err;
+    });
+  return micPromise;
 }
 
-async function initWebRTC() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    localStream.getAudioTracks()[0].enabled = false;
-
-    if (currentUser) {
-      attachAudioAnalyser(currentUser.id, localStream);
-    }
-  } catch (err) {
-    console.warn("Microphone access declined or delayed:", err);
-  }
-
-  socket.on("user-joined-webrtc", ({ socketId, userId }) => createPeerConnection(socketId, userId, true));
-  socket.on("webrtc-offer", async ({ senderId, offer }) => {
-    const pc = createPeerConnection(senderId, senderId, false);
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit("webrtc-answer", { targetId: senderId, answer });
-  });
-  socket.on("webrtc-answer", async ({ senderId, answer }) => {
-    if (peerConnections[senderId]) {
-      await peerConnections[senderId].setRemoteDescription(new RTCSessionDescription(answer));
-    }
-  });
-  socket.on("webrtc-ice-candidate", async ({ senderId, candidate }) => {
-    if (peerConnections[senderId]) {
-      await peerConnections[senderId].addIceCandidate(new RTCIceCandidate(candidate));
-    }
-  });
-  socket.on("user-disconnected-webrtc", ({ socketId }) => {
-    if (peerConnections[socketId]) {
-      peerConnections[socketId].close();
-      delete peerConnections[socketId];
-    }
-    removeAudioAnalyser(socketId);
-    const elem = document.getElementById(`audio-${socketId}`);
-    if (elem) elem.remove();
-  });
+function attachMicToPeer(pc) {
+  const track = localStream && localStream.getAudioTracks()[0];
+  if (track && pc._sender) pc._sender.replaceTrack(track).catch(e => console.warn("replaceTrack failed", e));
 }
 
-function createPeerConnection(targetSocketId, userId, isInitiator) {
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  peerConnections[targetSocketId] = pc;
+function closePeer(remoteId) {
+  const pc = peerConnections[remoteId];
+  if (pc) { pc.onicecandidate = pc.ontrack = pc.onconnectionstatechange = null; pc.close(); }
+  delete peerConnections[remoteId];
+  delete pendingIce[remoteId];
+  if (peerUser[remoteId]) removeAudioAnalyser(peerUser[remoteId]);
+  delete peerUser[remoteId];
+  const elem = document.getElementById(`audio-${remoteId}`);
+  if (elem) elem.remove();
+}
 
-  if (localStream) {
-    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-  }
+function createPeer(remoteId, remoteUserId) {
+  if (peerConnections[remoteId]) closePeer(remoteId);
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  peerConnections[remoteId] = pc;
+  pendingIce[remoteId] = [];
+  peerUser[remoteId] = remoteUserId;
 
-  pc.onicecandidate = event => {
-    if (event.candidate) {
-      socket.emit("webrtc-ice-candidate", { targetId: targetSocketId, candidate: event.candidate });
-    }
+  pc.onicecandidate = e => {
+    if (e.candidate) socket.emit("webrtc-ice-candidate", { targetId: remoteId, candidate: e.candidate });
   };
 
-  pc.ontrack = event => {
-    let remoteAudio = document.getElementById(`audio-${targetSocketId}`);
-    if (!remoteAudio) {
-      remoteAudio = document.createElement("audio");
-      remoteAudio.id = `audio-${targetSocketId}`;
-      remoteAudio.autoplay = true;
-      const audioContainer = document.getElementById("audio-streams");
-      if (audioContainer) audioContainer.appendChild(remoteAudio);
+  pc.ontrack = e => {
+    const stream = e.streams[0] || new MediaStream([e.track]);
+    let audio = document.getElementById(`audio-${remoteId}`);
+    if (!audio) {
+      audio = document.createElement("audio");
+      audio.id = `audio-${remoteId}`;
+      audio.autoplay = true;
+      audio.playsInline = true;
+      (document.getElementById("audio-streams") || document.body).appendChild(audio);
     }
-    remoteAudio.srcObject = event.streams[0];
-    attachAudioAnalyser(userId, event.streams[0]);
+    audio.srcObject = stream;
+    if (audioUnlocked) audio.play().catch(() => {});
+    attachAudioAnalyser(remoteUserId, stream);
   };
 
-  if (isInitiator) {
-    pc.onnegotiationneeded = async () => {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit("webrtc-offer", { targetId: targetSocketId, offer });
-    };
-  }
+  pc.onconnectionstatechange = () => {
+    console.log("[voice]", remoteId, pc.connectionState);
+    if (pc.connectionState === "failed") closePeer(remoteId);
+  };
   return pc;
 }
 
-const talkBtn = document.getElementById('talk');
+async function callPeer(remoteId, remoteUserId) {
+  const pc = createPeer(remoteId, remoteUserId);
+  const tx = pc.addTransceiver("audio", { direction: "sendrecv" });
+  pc._sender = tx.sender;
+  attachMicToPeer(pc);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit("webrtc-offer", { targetId: remoteId, offer: pc.localDescription });
+}
 
+async function flushIce(remoteId) {
+  const pc = peerConnections[remoteId];
+  const list = pendingIce[remoteId] || [];
+  pendingIce[remoteId] = [];
+  for (const c of list) { try { await pc.addIceCandidate(c); } catch (e) { console.warn("ICE add failed", e); } }
+}
+
+// Registered ONCE at startup
+socket.on("user-joined-webrtc", ({ socketId, userId }) => {
+  callPeer(socketId, userId).catch(e => console.warn("call failed", e));
+});
+
+socket.on("webrtc-offer", async ({ senderId, senderUserId, offer }) => {
+  try {
+    const pc = createPeer(senderId, senderUserId || senderId);
+    await pc.setRemoteDescription(offer);
+    const tx = pc.getTransceivers().find(t => t.receiver && t.receiver.track && t.receiver.track.kind === "audio");
+    if (tx) { tx.direction = "sendrecv"; pc._sender = tx.sender; attachMicToPeer(pc); }
+    await flushIce(senderId);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("webrtc-answer", { targetId: senderId, answer: pc.localDescription });
+  } catch (e) { console.warn("offer handling failed", e); }
+});
+
+socket.on("webrtc-answer", async ({ senderId, answer }) => {
+  const pc = peerConnections[senderId];
+  if (!pc) return;
+  try { await pc.setRemoteDescription(answer); await flushIce(senderId); }
+  catch (e) { console.warn("answer handling failed", e); }
+});
+
+socket.on("webrtc-ice-candidate", async ({ senderId, candidate }) => {
+  const pc = peerConnections[senderId];
+  if (!pc || !candidate) return;
+  if (pc.remoteDescription) { try { await pc.addIceCandidate(candidate); } catch (e) { console.warn(e); } }
+  else (pendingIce[senderId] = pendingIce[senderId] || []).push(candidate);
+});
+
+socket.on("user-disconnected-webrtc", ({ socketId }) => closePeer(socketId));
+
+function unlockRemoteAudio() {
+  document.querySelectorAll("#audio-streams audio, audio[id^='audio-']").forEach(a => a.play().catch(() => {}));
+}
+
+async function rejoinAudioAndMedia() {
+  audioUnlocked = true;
+  const btn = document.getElementById("btn-rejoin-audio");
+  if (btn) btn.style.display = "none";
+  initAudioContext();
+  unlockRemoteAudio();
+  if (player && player.playVideo && currentTrack) player.playVideo();
+  try { await getMic(); } catch (e) {}
+}
+
+const talkBtn = document.getElementById("talk");
 const setTalkingState = async (isTalking) => {
+  wantTalk = isTalking;
   initAudioContext();
   audioUnlocked = true;
-
-  const rejoinBtn = document.getElementById("btn-rejoin-audio");
-  if (rejoinBtn) rejoinBtn.style.display = "none";
-
-  if (!localStream || !localStream.getAudioTracks()[0]) {
-    await initWebRTC();
-  }
-
-  if (localStream && localStream.getAudioTracks()[0]) {
-    localStream.getAudioTracks()[0].enabled = isTalking;
-  }
-
+  unlockRemoteAudio();
+  const btn = document.getElementById("btn-rejoin-audio");
+  if (btn) btn.style.display = "none";
+  if (isTalking && !localStream) { try { await getMic(); } catch (e) {} }
+  const track = localStream && localStream.getAudioTracks()[0];
+  if (track) track.enabled = wantTalk;
   if (talkBtn) {
-    talkBtn.classList.toggle('live', isTalking);
-    talkBtn.setAttribute('aria-pressed', isTalking);
-    talkBtn.textContent = isTalking ? 'Talking' : 'Hold to talk';
+    talkBtn.classList.toggle("live", wantTalk);
+    talkBtn.setAttribute("aria-pressed", wantTalk);
+    talkBtn.textContent = wantTalk ? "Talking" : "Hold to talk";
   }
 };
 
 if (talkBtn) {
-  ['pointerdown'].forEach(ev => talkBtn.addEventListener(ev, e => { e.preventDefault(); setTalkingState(true); }));
-  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
+  talkBtn.addEventListener("pointerdown", e => { e.preventDefault(); setTalkingState(true); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
 }
 
 // 7. ROOM STATE RESTORATION
@@ -595,7 +638,7 @@ function renderQueue(queue) {
           <div class="t">${t.title}</div>
           <div class="s">${t.channel} · added by ${t.addedBy}</div>
         </div>
-        ${(isHost || (currentUser && t.addedBy === currentUser.user_metadata?.full_name)) ? `<button class="sm" onclick="removeQueueItem(${i})">Remove</button>` : ''}
+        ${(isHost || (currentUser && t.addedBy === (currentUser.user_metadata?.full_name || currentUser.email))) ? `<button class="sm" onclick="removeQueueItem(${i})">Remove</button>` : ''}
       </div>
     `).join('');
   } else {
