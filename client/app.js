@@ -35,33 +35,6 @@ let toastTimeout = null;
 let activeTalkers = new Map();
 let micTestObj = null;
 
-// ===== VOICE (WebRTC) CONFIG WITH TURN RELAYS =====
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-  {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelay",
-    credential: "openrelay"
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelay",
-    credential: "openrelay"
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
-    username: "openrelay",
-    credential: "openrelay"
-  }
-];
-
-const pendingIce = {};
-const peerUser = {};
-let micPromise = null;
-let wantTalk = false;
-
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
   if (screenId) {
