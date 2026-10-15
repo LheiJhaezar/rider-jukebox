@@ -33,7 +33,7 @@
     <!-- LOBBY -->
     <section class="screen" id="s-lobby">
       <div class="page">
-        <div class="brand">Rider Jukebox <small id="status"></small></div>
+        <div class="brand">Rider Jukebox <small id="status">Connecting...</small></div>
         <div class="row">
           <div class="row" style="justify-content:flex-start">
             <div class="avatar" id="user-avatar">--</div>
@@ -70,7 +70,7 @@
           <strong id="display-room-code">------</strong><span>Copy link</span>
         </button>
         <div class="row">
-          <button class="btn text" id="shrink" onclick="toggleMiniPlayer()">Shrink video</button>
+          <button class="btn quiet rbtn" id="ridebtn" onclick="openRideMode()">Ride mode</button>
           <button class="btn text" onclick="leaveLobby()">Leave</button>
         </div>
       </div>
@@ -94,6 +94,12 @@
         <span class="bars"><b></b><b></b><b></b></span>
         <span id="talktext">Nobody is talking</span>
         <button class="sm skip" id="skip" onclick="voteSkip()" style="margin-left:auto; display:none;">Vote skip 0/0</button>
+      </div>
+
+      <div class="statusrow">
+        <button class="pill bad" id="micchip" onclick="switchTab('p-mic', document.querySelector('[data-tab=\'p-mic\']'))">Mic not set up</button>
+        <button class="pill" id="vchip">Voice: waiting</button>
+        <button class="pill" id="shrink" onclick="toggleMiniPlayer()">Shrink video</button>
       </div>
 
       <div class="riders" id="riders"></div>
@@ -140,6 +146,7 @@
           <div class="status" id="mstat">Not tested yet.</div>
           <div class="fine" id="mdev"></div>
           <button class="btn primary" id="mtest" onclick="toggleMicTest()">Start mic test</button>
+          <button class="btn quiet" style="margin-top:10px; min-height:44px;" onclick="copyDiagnosticsHandler(this)">Copy diagnostics</button>
         </div>
       </div>
 
@@ -149,10 +156,56 @@
         <button class="tab" role="tab" aria-selected="false" data-tab="p-search" onclick="switchTab('p-search', this)">Search</button>
         <button class="talk" id="talk" aria-pressed="false">Hold to talk</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="p-sig" onclick="switchTab('p-sig', this)">Signals</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="p-mic" onclick="switchTab('p-mic', this)">Mic check</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="p-mic" onclick="switchTab('p-mic', this)">Mic</button>
       </nav>
     </section>
 
+  </div>
+
+  <!-- READY CHECK OVERLAY -->
+  <div class="overlay" id="ready" hidden>
+    <h2 style="margin-top:4vh">Get ready to ride</h2>
+    <p class="lead">Two quick steps so everyone can hear you and you can hear them.</p>
+    <div class="step" id="st-audio"><b>Audio</b><span>Not on yet</span></div>
+    <div class="step" id="st-mic"><b>Microphone</b><span>Not allowed yet</span></div>
+    <div class="step" id="st-link"><b>Riders connected</b><span>Waiting</span></div>
+    <div class="meter"><i id="rlvl"></i></div>
+    <div class="fine" id="rmsg">Tap the button, allow the microphone, then say something.</div>
+    <div style="flex:1"></div>
+    <button class="btn primary" id="rgo" onclick="runReadyCheck()">Turn on audio and mic</button>
+    <button class="btn text" id="rskip" onclick="skipReadyCheck()">Skip for now</button>
+  </div>
+
+  <!-- RIDE MODE OVERLAY -->
+  <div class="overlay" id="ride" hidden>
+    <div class="rtop">
+      <span class="pill" id="rcode">------</span>
+      <span class="pill ok" id="rmic">Mic ready</span>
+      <button class="btn quiet rbtn" id="rexit" onclick="closeRideMode()">Exit</button>
+    </div>
+    <div>
+      <div class="rtitle" id="rtitle">Nothing playing</div>
+      <div class="rby" id="rby">Add a song before you ride</div>
+      <div class="lane" aria-hidden="true"><i id="rbar"></i></div>
+    </div>
+    <div class="rline" id="rline">
+      <span class="bars"><b></b><b></b><b></b></span>
+      <span id="rtxt">Nobody is talking</span>
+    </div>
+    <div class="rsig">
+      <button class="btn" onclick="sendSignal('Fuel stop')">Fuel stop</button>
+      <button class="btn" onclick="sendSignal('Slow down')">Slow down</button>
+      <button class="btn" onclick="sendSignal('Hazard ahead')">Hazard ahead</button>
+      <button class="btn" onclick="sendSignal('Pull over')">Pull over</button>
+      <button class="btn" onclick="sendSignal('Ready')">Ready</button>
+    </div>
+    <div class="rrow">
+      <button class="btn quiet" id="vdn" onclick="changeVolume(-10)">Music down</button>
+      <button class="btn quiet" id="skip2" onclick="voteSkip()">Vote skip</button>
+      <button class="btn quiet" id="vup" onclick="changeVolume(10)">Music up</button>
+    </div>
+    <button class="rtalkbtn" id="rtalk">Hold to talk</button>
+    <div class="fine" style="text-align:center" id="rnote">Screen stays on while ride mode is open</div>
   </div>
 
   <div id="audio-streams"></div>

@@ -16,6 +16,19 @@ const io = new Server(server, {
 const rooms = {};
 const searchCache = new Map();
 
+// Dynamic ICE/TURN Server Configuration Endpoint
+app.get('/api/ice-servers', (req, res) => {
+  const list = [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+    list.push({
+      urls: process.env.TURN_URL.split(',').map(u => u.trim()),
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_CREDENTIAL
+    });
+  }
+  res.json(list);
+});
+
 app.get('/api/search-youtube', async (req, res) => {
   const query = req.query.q?.trim();
   const apiKey = process.env.YOUTUBE_API_KEY;
@@ -120,7 +133,6 @@ io.on('connection', (socket) => {
     broadcastRoomState(roomCode);
   });
 
-  // Handler for Queue Removal
   socket.on('remove-queue-item', ({ roomCode, index }) => {
     const room = rooms[roomCode];
     if (!room || !room.queue[index]) return;
@@ -163,7 +175,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC Relay Handlers with Sender User ID
   socket.on('webrtc-offer', ({ targetId, offer }) =>
     io.to(targetId).emit('webrtc-offer', { senderId: socket.id, senderUserId: socket.userId, offer }));
   socket.on('webrtc-answer', ({ targetId, answer }) =>

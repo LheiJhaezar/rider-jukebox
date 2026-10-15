@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Ensure your actual anon key is placed here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Place actual key here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -28,12 +28,38 @@ let audioAnalysers = {};
 let audioAnimFrame = null;
 let targetMusicVolume = 100;
 let baseMusicVolume = 100;
+let userVolume = 100;
 let isDucked = false;
 let duckTimeout = null;
 let toastTimeout = null;
 
 let activeTalkers = new Map();
 let micTestObj = null;
+
+// Ready Check & Wake Lock
+let readyDone = false;
+let wakeLock = null;
+
+// ===== VOICE (WebRTC) SETUP =====
+let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+async function loadIceServers() {
+  try {
+    const r = await fetch(`${SERVER_URL}/api/ice-servers`);
+    if (r.ok) {
+      const list = await r.json();
+      if (Array.isArray(list) && list.length) ICE_SERVERS = list;
+    }
+  } catch (e) {
+    console.warn("[voice] could not load ICE servers, using STUN only", e);
+  }
+}
+const iceReady = loadIceServers();
+let micError = null;
+
+const pendingIce = {};
+const peerUser = {};
+let micPromise = null;
+let wantTalk = false;
 
 function switchScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
@@ -54,7 +80,7 @@ function fmt(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// 1. NAVIGATION & LAYOUT
+// 1. NAVIGATION & LAYOUT CONTROLS
 function switchTab(tabId, tabBtn) {
   document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', 'false'));
   if (tabBtn) tabBtn.setAttribute('aria-selected', 'true');
@@ -149,15 +175,19 @@ function processAudioVolumes() {
 
   const talkBar = document.getElementById('talkbar');
   const talkText = document.getElementById('talktext');
+  const rline = document.getElementById('rline');
+  const rtxt = document.getElementById('rtxt');
+
+  const names = Array.from(activeTalkers.values());
+  const statusStr = names.length ? names.join(' and ') + ' talking' : 'Nobody is talking';
+
   if (talkBar && talkText) {
-    const names = Array.from(activeTalkers.values());
-    if (names.length > 0) {
-      talkBar.classList.add('on');
-      talkText.textContent = names.join(' and ') + ' talking';
-    } else {
-      talkBar.classList.remove('on');
-      talkText.textContent = 'Nobody is talking';
-    }
+    talkBar.classList.toggle('on', names.length > 0);
+    talkText.textContent = statusStr;
+  }
+  if (rline && rtxt) {
+    rline.classList.toggle('on', names.length > 0);
+    rtxt.textContent = statusStr;
   }
 
   const enableDucking = document.getElementById("chk-ducking")?.checked;
@@ -167,7 +197,7 @@ function processAudioVolumes() {
       duckTimeout = null;
       if (!isDucked) {
         isDucked = true;
-        if (player && player.getVolume) baseMusicVolume = player.getVolume() || 100;
+        if (player && player.getVolume) baseMusicVolume = player.getVolume() || userVolume;
         targetMusicVolume = Math.round(baseMusicVolume * 0.25);
         smoothSetVolume(targetMusicVolume);
       }
@@ -227,6 +257,7 @@ function playSynthesizedChime() {
 function sendSignal(type) {
   if (!currentRoomCode) return;
   socket.emit('send-quick-signal', { roomCode: currentRoomCode, signalType: type });
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
 socket.on('receive-quick-signal', ({ senderName, signalType }) => {
@@ -241,7 +272,7 @@ socket.on('receive-quick-signal', ({ senderName, signalType }) => {
   playSynthesizedChime();
 
   if (player && player.setVolume && player.getVolume) {
-    baseMusicVolume = player.getVolume() || 100;
+    baseMusicVolume = player.getVolume() || userVolume;
     player.setVolume(Math.round(baseMusicVolume * 0.2));
     setTimeout(() => {
       if (!isDucked) player.setVolume(baseMusicVolume);
@@ -264,6 +295,7 @@ function saveRoomSession(code) {
 
 function clearRoomSession() {
   localStorage.removeItem('rj:lastRoom');
+  sessionStorage.removeItem('rj:rideMode');
   history.replaceState(null, '', '/');
 }
 
@@ -339,10 +371,16 @@ function joinSocketRoom(roomCode) {
   socket.emit("join-room", { roomCode, userId, userName });
 
   const displayElem = document.getElementById("display-room-code");
+  const rcodeElem = document.getElementById("rcode");
   if (displayElem) displayElem.innerText = roomCode;
+  if (rcodeElem) rcodeElem.innerText = roomCode;
 
   const rejoinBtn = document.getElementById("btn-rejoin-audio");
   if (rejoinBtn) rejoinBtn.style.display = audioUnlocked ? "none" : "block";
+
+  if (!readyDone) {
+    document.getElementById("ready").hidden = false;
+  }
 }
 
 socket.on('connect', () => {
@@ -398,19 +436,6 @@ function leaveLobby() {
 }
 
 // ===== 6. VOICE (WebRTC) =====
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-  { urls: "stun:stun3.l.google.com:19302" },
-  { urls: "stun:stun4.l.google.com:19302" }
-];
-
-const pendingIce = {};
-const peerUser = {};
-let micPromise = null;
-let wantTalk = false;
-
 function getMic() {
   if (localStream) return Promise.resolve(localStream);
   if (micPromise) return micPromise;
@@ -419,6 +444,8 @@ function getMic() {
     .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false })
     .then(stream => {
       localStream = stream;
+      micError = null;
+      updateMicPills('ok');
       const track = stream.getAudioTracks()[0];
       if (track) track.enabled = wantTalk;
       if (currentUser) attachAudioAnalyser(currentUser.id, stream);
@@ -427,10 +454,25 @@ function getMic() {
     })
     .catch(err => {
       micPromise = null;
-      console.warn("Microphone unavailable (receive-only mode active):", err.name, err.message);
+      micError = err.name;
+      updateMicPills(err.name === 'NotAllowedError' ? 'blocked' : 'off');
+      console.warn("Microphone unavailable:", err.name, err.message);
       return null;
     });
   return micPromise;
+}
+
+function updateMicPills(state) {
+  const c = document.getElementById('micchip');
+  const r = document.getElementById('rmic');
+  const map = {
+    ok: ['Mic ready', 'pill ok'],
+    off: ['Mic not set up', 'pill bad'],
+    blocked: ['Mic blocked', 'pill bad']
+  };
+  const val = map[state] || map.off;
+  if (c) { c.textContent = val[0]; c.className = val[1]; }
+  if (r) { r.textContent = val[0]; r.className = val[1]; }
 }
 
 function attachMicToPeer(pc) {
@@ -449,6 +491,7 @@ function closePeer(remoteId) {
   delete peerUser[remoteId];
   const elem = document.getElementById(`audio-${remoteId}`);
   if (elem) elem.remove();
+  updateVoicePill();
 }
 
 function createPeer(remoteId, remoteUserId) {
@@ -479,17 +522,25 @@ function createPeer(remoteId, remoteUserId) {
 
   pc.onconnectionstatechange = () => {
     console.log("[voice]", remoteId, pc.connectionState);
-    if (pc.connectionState === "failed") closePeer(remoteId);
+    updateVoicePill();
+    if (pc.connectionState === "failed") {
+      if (!pc._restarted) {
+        pc._restarted = true;
+        try { pc.restartIce(); } catch (e) { closePeer(remoteId); }
+      } else closePeer(remoteId);
+    }
   };
+  pc.oniceconnectionstatechange = () => console.log("[voice] ice", remoteId, pc.iceConnectionState);
+
   return pc;
 }
 
 async function callPeer(remoteId, remoteUserId) {
+  await iceReady;
   const pc = createPeer(remoteId, remoteUserId);
-  const direction = localStream ? "sendrecv" : "recvonly";
-  const tx = pc.addTransceiver("audio", { direction });
+  const tx = pc.addTransceiver("audio", { direction: "sendrecv" });
   pc._sender = tx.sender;
-  if (localStream) attachMicToPeer(pc);
+  attachMicToPeer(pc);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   socket.emit("webrtc-offer", { targetId: remoteId, offer: pc.localDescription });
@@ -508,14 +559,11 @@ socket.on("user-joined-webrtc", ({ socketId, userId }) => {
 
 socket.on("webrtc-offer", async ({ senderId, senderUserId, offer }) => {
   try {
+    await iceReady;
     const pc = createPeer(senderId, senderUserId || senderId);
     await pc.setRemoteDescription(offer);
     const tx = pc.getTransceivers().find(t => t.receiver && t.receiver.track && t.receiver.track.kind === "audio");
-    if (tx) { 
-      tx.direction = localStream ? "sendrecv" : "recvonly"; 
-      pc._sender = tx.sender; 
-      if (localStream) attachMicToPeer(pc); 
-    }
+    if (tx) { tx.direction = "sendrecv"; pc._sender = tx.sender; attachMicToPeer(pc); }
     await flushIce(senderId);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -543,6 +591,13 @@ function unlockRemoteAudio() {
   document.querySelectorAll("#audio-streams audio, audio[id^='audio-']").forEach(a => a.play().catch(() => {}));
 }
 
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && audioUnlocked) {
+    unlockRemoteAudio();
+    if (!document.getElementById('ride').hidden) requestRideWakeLock();
+  }
+});
+
 async function rejoinAudioAndMedia() {
   audioUnlocked = true;
   const btn = document.getElementById("btn-rejoin-audio");
@@ -553,39 +608,251 @@ async function rejoinAudioAndMedia() {
   try { await getMic(); } catch (e) {}
 }
 
-const talkBtn = document.getElementById("talk");
+const talkBtns = ['#talk', '#rtalk'];
+
 const setTalkingState = async (isTalking) => {
   wantTalk = isTalking;
   initAudioContext();
   audioUnlocked = true;
   unlockRemoteAudio();
+
   const btn = document.getElementById("btn-rejoin-audio");
   if (btn) btn.style.display = "none";
-  if (isTalking && !localStream) { try { await getMic(); } catch (e) {} }
+
+  if (isTalking && !localStream) {
+    try { await getMic(); } catch (e) {}
+  }
+
   const track = localStream && localStream.getAudioTracks()[0];
   if (track) track.enabled = wantTalk;
-  if (talkBtn) {
-    talkBtn.classList.toggle("live", wantTalk);
-    talkBtn.setAttribute("aria-pressed", wantTalk);
-    talkBtn.textContent = wantTalk ? "Talking" : "Hold to talk";
-  }
+
+  talkBtns.forEach(id => {
+    const b = document.querySelector(id);
+    if (b) {
+      b.classList.toggle("live", wantTalk);
+      b.setAttribute("aria-pressed", wantTalk);
+      b.textContent = wantTalk ? "Talking" : "Hold to talk";
+    }
+  });
+
+  if (isTalking && navigator.vibrate) navigator.vibrate(15);
 };
 
-if (talkBtn) {
-  talkBtn.addEventListener("pointerdown", e => { e.preventDefault(); setTalkingState(true); });
-  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => talkBtn.addEventListener(ev, () => setTalkingState(false)));
+talkBtns.forEach(id => {
+  const b = document.querySelector(id);
+  if (b) {
+    b.addEventListener("pointerdown", e => { e.preventDefault(); setTalkingState(true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, () => setTalkingState(false)));
+  }
+});
+
+function updateVoicePill() {
+  const pill = document.getElementById('vchip');
+  if (!pill) return;
+
+  const connectedPeers = Object.values(peerConnections).filter(pc => pc.connectionState === 'connected').length;
+  const totalPeers = Object.keys(peerConnections).length + 1;
+
+  if (connectedPeers > 0) {
+    pill.textContent = `Voice: ${connectedPeers + 1} of ${totalPeers} linked`;
+    pill.className = 'pill ok';
+  } else {
+    pill.textContent = `Voice: waiting`;
+    pill.className = 'pill';
+  }
 }
 
-// 7. ROOM STATE RESTORATION
+// Diagnostics Exporter
+async function copyDiagnostics() {
+  const peers = {};
+  for (const [id, pc] of Object.entries(peerConnections)) {
+    let candidateType = null;
+    try {
+      const stats = await pc.getStats();
+      stats.forEach(r => {
+        if (r.type === "transport" && r.selectedCandidatePairId) {
+          const pair = stats.get(r.selectedCandidatePairId);
+          const local = pair && stats.get(pair.localCandidateId);
+          if (local) candidateType = local.candidateType;
+        }
+      });
+    } catch (e) {}
+    peers[id] = {
+      connectionState: pc.connectionState,
+      iceConnectionState: pc.iceConnectionState,
+      signalingState: pc.signalingState,
+      candidateType,
+      directions: pc.getTransceivers().map(t => t.currentDirection)
+    };
+  }
+  const t = localStream && localStream.getAudioTracks()[0];
+  const text = JSON.stringify({
+    userAgent: navigator.userAgent,
+    micError,
+    track: t ? { readyState: t.readyState, muted: t.muted, enabled: t.enabled } : null,
+    peers
+  }, null, 2);
+  try { await navigator.clipboard.writeText(text); } catch (e) {}
+  return text;
+}
+
+async function copyDiagnosticsHandler(btn) {
+  const diag = await copyDiagnostics();
+  if (btn) {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => btn.textContent = orig, 2000);
+  }
+}
+
+// 7. READY CHECK OVERLAY
+function updateReadyStep(id, ok, text) {
+  const e = document.querySelector(id);
+  if (e) {
+    e.className = 'step ' + (ok ? 'ok' : 'bad');
+    const span = e.querySelector('span');
+    if (span) span.textContent = text;
+  }
+}
+
+async function runReadyCheck() {
+  const msg = document.getElementById('rmsg');
+  const btn = document.getElementById('rgo');
+
+  initAudioContext();
+  unlockRemoteAudio();
+  updateReadyStep('#st-audio', true, 'On');
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    let heard = false;
+    let raf = null;
+
+    updateReadyStep('#st-mic', false, 'Say something');
+    if (msg) msg.textContent = 'Say something. The bar should move.';
+
+    function loop() {
+      analyser.getByteTimeDomainData(buf);
+      let max = 0;
+      for (const v of buf) max = Math.max(max, Math.abs(v - 128));
+      const rlvl = document.getElementById('rlvl');
+      if (rlvl) rlvl.style.width = Math.min(100, (max / 128) * 220) + '%';
+
+      if ((max / 128) > 0.06 && !heard) {
+        heard = true;
+        updateReadyStep('#st-mic', true, 'Working');
+        if (msg) msg.textContent = 'Your mic works.';
+        updateMicPills('ok');
+        if (btn) {
+          btn.textContent = 'Done';
+          btn.onclick = finishReady;
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    }
+
+    loop();
+
+    setTimeout(() => {
+      cancelAnimationFrame(raf);
+      stream.getTracks().forEach(t => t.stop());
+      ctx.close();
+      if (!heard) {
+        updateReadyStep('#st-mic', false, 'No sound heard');
+        if (msg) msg.textContent = 'We heard nothing. Check the mute switch on your headset, or pick another mic in your phone settings.';
+        updateMicPills('off');
+      }
+    }, 10000);
+
+  } catch (err) {
+    updateReadyStep('#st-mic', false, err.name === 'NotAllowedError' ? 'Blocked' : 'Not found');
+    updateMicPills('blocked');
+    if (msg) {
+      msg.textContent = err.name === 'NotAllowedError'
+        ? 'Mic is blocked. Allow microphone for this site in your browser settings, then tap the button again.'
+        : 'No microphone found. Connect a headset or check your Bluetooth device.';
+    }
+  }
+}
+
+function finishReady() {
+  readyDone = true;
+  document.getElementById('ready').hidden = true;
+  updateReadyStep('#st-link', true, 'Linked');
+}
+
+function skipReadyCheck() {
+  readyDone = true;
+  document.getElementById('ready').hidden = true;
+}
+
+// 8. RIDE MODE
+async function requestRideWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) {
+    const rnote = document.getElementById('rnote');
+    if (rnote) rnote.textContent = 'Could not keep the screen on. Change your phone sleep setting.';
+  }
+}
+
+function openRideMode() {
+  document.getElementById('ride').hidden = false;
+  sessionStorage.setItem('rj:rideMode', 'on');
+  requestRideWakeLock();
+}
+
+function closeRideMode() {
+  document.getElementById('ride').hidden = true;
+  sessionStorage.removeItem('rj:rideMode');
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+function changeVolume(delta) {
+  if (!player || !player.getVolume || !player.setVolume) return;
+  userVolume = Math.max(0, Math.min(100, userVolume + delta));
+  player.setVolume(userVolume);
+
+  const toast = document.getElementById('toast');
+  if (toast) {
+    toast.textContent = `Music volume ${userVolume}%`;
+    toast.classList.add('on');
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => toast.classList.remove('on'), 1200);
+  }
+}
+
+// 9. ROOM STATE RESTORATION
 socket.on('full-room-state', ({ roomCode, hostUserId, currentTrack: track, currentPosition, isPlaying, queue, serverTimestamp }) => {
   switchScreen("s-room");
+
+  if (sessionStorage.getItem('rj:rideMode') === 'on') {
+    openRideMode();
+  }
 
   if (track) {
     currentTrack = track;
     const titleElem = document.getElementById("np-title");
     const byElem = document.getElementById("np-by");
+    const rtitle = document.getElementById("rtitle");
+    const rby = document.getElementById("rby");
+
     if (titleElem) titleElem.innerText = track.title;
     if (byElem) byElem.innerText = `${track.channel} — added by ${track.addedBy}`;
+    if (rtitle) rtitle.innerText = track.title;
+    if (rby) rby.innerText = `${track.channel} — added by ${track.addedBy}`;
 
     const placeholder = document.getElementById("ph");
     if (placeholder) placeholder.style.display = "none";
@@ -610,19 +877,20 @@ socket.on('room-state-update', (state) => {
         <div class="avatar">${getInitials(r.name)}</div>
         <span class="rname">${r.name.split(" ")[0]}</span>
         <span class="bars"><b></b><b></b><b></b></span>
+        <span class="rstat">${r.status === 'reconnecting' ? 'Reconnecting' : (r.isHost ? 'Host' : 'Linked')}</span>
       </div>
     `).join('');
   }
 
   const skipBtn = document.getElementById('skip');
+  const skip2Btn = document.getElementById('skip2');
+  const skipTxt = isHost ? 'Skip (Host)' : `Vote skip ${state.skipVotes}/${state.votesNeeded}`;
+
   if (skipBtn) {
-    if (state.currentTrack) {
-      skipBtn.style.display = 'inline-flex';
-      skipBtn.innerText = isHost ? 'Skip (Host)' : `Vote skip ${state.skipVotes}/${state.votesNeeded}`;
-    } else {
-      skipBtn.style.display = 'none';
-    }
+    skipBtn.style.display = state.currentTrack ? 'inline-flex' : 'none';
+    skipBtn.innerText = skipTxt;
   }
+  if (skip2Btn) skip2Btn.innerText = skipTxt;
 
   renderQueue(state.queue);
 });
@@ -659,7 +927,7 @@ function removeQueueItem(index) {
   }
 }
 
-// 8. PLAYER CONTROLS & CONTINUOUS HOST TIME BROADCAST
+// 10. PLAYER CONTROLS
 function onYouTubeIframeAPIReady() {
   player = new YT.Player('yt', {
     height: '100%',
@@ -681,16 +949,19 @@ setInterval(() => {
     const cur = player.getCurrentTime();
     const dur = player.getDuration();
     if (dur > 0) {
+      const pct = (cur / dur * 100) + '%';
       const nowElem = document.getElementById('t-now');
       const lenElem = document.getElementById('t-len');
       const barElem = document.getElementById('bar');
+      const rbarElem = document.getElementById('rbar');
+
       if (nowElem) nowElem.innerText = fmt(cur);
       if (lenElem) lenElem.innerText = fmt(dur);
-      if (barElem) barElem.style.width = (cur / dur * 100) + '%';
+      if (barElem) barElem.style.width = pct;
+      if (rbarElem) rbarElem.style.width = pct;
     }
   }
 
-  // Continuous time sync broadcast by Host
   if (isHost && currentRoomCode && player && player.getCurrentTime) {
     const curTime = player.getCurrentTime();
     if (curTime > 0) {
@@ -703,8 +974,13 @@ socket.on('play-track', ({ track, currentTime, serverTimestamp }) => {
   currentTrack = track;
   const titleElem = document.getElementById("np-title");
   const byElem = document.getElementById("np-by");
+  const rtitle = document.getElementById("rtitle");
+  const rby = document.getElementById("rby");
+
   if (titleElem) titleElem.innerText = track.title;
   if (byElem) byElem.innerText = `${track.channel} — added by ${track.addedBy}`;
+  if (rtitle) rtitle.innerText = track.title;
+  if (rby) rby.innerText = `${track.channel} — added by ${track.addedBy}`;
 
   const placeholder = document.getElementById("ph");
   if (placeholder) placeholder.style.display = "none";
@@ -723,14 +999,16 @@ socket.on('queue-empty', () => {
   const titleElem = document.getElementById("np-title");
   const byElem = document.getElementById("np-by");
   const barElem = document.getElementById("bar");
-  const nowElem = document.getElementById("t-now");
-  const lenElem = document.getElementById("t-len");
+  const rbarElem = document.getElementById("rbar");
+  const rtitle = document.getElementById("rtitle");
+  const rby = document.getElementById("rby");
 
   if (titleElem) titleElem.innerText = "Nothing playing";
   if (byElem) byElem.innerText = "Add a song from Search";
+  if (rtitle) rtitle.innerText = "Nothing playing";
+  if (rby) rby.innerText = "Add a song before you ride";
   if (barElem) barElem.style.width = '0%';
-  if (nowElem) nowElem.innerText = "0:00";
-  if (lenElem) lenElem.innerText = "0:00";
+  if (rbarElem) rbarElem.style.width = '0%';
 
   const placeholder = document.getElementById("ph");
   if (placeholder) placeholder.style.display = "grid";
@@ -754,7 +1032,7 @@ function voteSkip() {
   }
 }
 
-// 9. CLEARABLE SEARCH
+// 11. CLEARABLE SEARCH
 function syncSearchClear() {
   const q = document.getElementById("q");
   const clr = document.getElementById("clr");
@@ -836,7 +1114,7 @@ function addToQueue(videoId, videoTitle, channelTitle, btn) {
   socket.emit("add-to-queue", { roomCode: currentRoomCode, videoId, videoTitle, channelTitle });
 }
 
-// 10. REAL MIC CHECK DIAGNOSTICS
+// 12. REAL MIC CHECK DIAGNOSTICS
 async function toggleMicTest() {
   const btn = document.getElementById("mtest");
   const st = document.getElementById("mstat");
