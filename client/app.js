@@ -8,7 +8,7 @@ const socket = io(SERVER_URL, {
 });
 
 const SUPABASE_URL = "https://kfanbcvigynrohzdyecw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Place your actual anon key string here
+const SUPABASE_ANON_KEY = "sb_publishable_nbZ0GPA4G1XcGgYuAtNTNQ_rW5TuQIq"; // Place actual key here
 
 window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -39,24 +39,6 @@ let micTestObj = null;
 // Ready Check & Wake Lock
 let readyDone = false;
 let wakeLock = null;
-
-// Mic Button Mode State ('hold' or 'toggle')
-let micButtonMode = localStorage.getItem('rj:micMode') || 'hold';
-
-function toggleMicButtonMode() {
-  micButtonMode = micButtonMode === 'hold' ? 'toggle' : 'hold';
-  localStorage.setItem('rj:micMode', micButtonMode);
-  updateMicModeUI();
-}
-
-function updateMicModeUI() {
-  const btn = document.getElementById('btn-micmode');
-  if (btn) {
-    btn.textContent = micButtonMode === 'hold' ? 'Mode: Hold' : 'Mode: Toggle';
-  }
-}
-
-document.addEventListener('DOMContentLoaded', updateMicModeUI);
 
 // ===== VOICE (WebRTC) SETUP =====
 let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -656,28 +638,12 @@ const setTalkingState = async (isTalking) => {
   if (isTalking && navigator.vibrate) navigator.vibrate(15);
 };
 
-// Handlers for both Hold and Toggle modes
 talkBtns.forEach(id => {
   const b = document.querySelector(id);
-  if (!b) return;
-
-  b.addEventListener("pointerdown", async (e) => {
-    e.preventDefault();
-    if (micButtonMode === 'toggle') {
-      const isCurrentlyTalking = wantTalk;
-      await setTalkingState(!isCurrentlyTalking);
-    } else {
-      await setTalkingState(true);
-    }
-  });
-
-  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => {
-    b.addEventListener(ev, () => {
-      if (micButtonMode === 'hold') {
-        setTalkingState(false);
-      }
-    });
-  });
+  if (b) {
+    b.addEventListener("pointerdown", e => { e.preventDefault(); setTalkingState(true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, () => setTalkingState(false)));
+  }
 });
 
 function updateVoicePill() {
