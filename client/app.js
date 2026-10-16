@@ -610,6 +610,35 @@ async function rejoinAudioAndMedia() {
 
 const talkBtns = ['#talk', '#rtalk'];
 
+// Mic mode: "hold" = push-to-talk (original), "toggle" = tap once to talk, tap again to mute
+let talkMode = 'hold';
+try { if (localStorage.getItem('rj:talkMode') === 'toggle') talkMode = 'toggle'; } catch (e) {}
+
+const talkLabel = (live) => talkMode === 'toggle'
+  ? (live ? 'Tap to mute' : 'Tap to talk')
+  : (live ? 'Talking' : 'Hold to talk');
+
+function refreshTalkUI() {
+  talkBtns.forEach(id => {
+    const b = document.querySelector(id);
+    if (b) {
+      b.classList.toggle('live', wantTalk);
+      b.setAttribute('aria-pressed', wantTalk);
+      b.textContent = talkLabel(wantTalk);
+    }
+  });
+  document.querySelectorAll('[data-talkmode]').forEach(s => {
+    s.setAttribute('aria-pressed', s.dataset.talkmode === talkMode);
+  });
+}
+
+function setTalkMode(mode) {
+  talkMode = mode === 'toggle' ? 'toggle' : 'hold';
+  try { localStorage.setItem('rj:talkMode', talkMode); } catch (e) {}
+  setTalkingState(false); // always start muted after switching modes
+  refreshTalkUI();
+}
+
 const setTalkingState = async (isTalking) => {
   wantTalk = isTalking;
   initAudioContext();
@@ -631,20 +660,30 @@ const setTalkingState = async (isTalking) => {
     if (b) {
       b.classList.toggle("live", wantTalk);
       b.setAttribute("aria-pressed", wantTalk);
-      b.textContent = wantTalk ? "Talking" : "Hold to talk";
+      b.textContent = talkLabel(wantTalk);
     }
   });
 
-  if (isTalking && navigator.vibrate) navigator.vibrate(15);
+  if (navigator.vibrate && (isTalking || talkMode === 'toggle')) navigator.vibrate(isTalking ? 15 : [10, 40, 10]);
 };
 
 talkBtns.forEach(id => {
   const b = document.querySelector(id);
   if (b) {
-    b.addEventListener("pointerdown", e => { e.preventDefault(); setTalkingState(true); });
-    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, () => setTalkingState(false)));
+    b.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      setTalkingState(talkMode === 'toggle' ? !wantTalk : true);
+    });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, () => {
+      if (talkMode === 'hold') setTalkingState(false); // toggle mode ignores release
+    }));
   }
 });
+
+document.querySelectorAll('[data-talkmode]').forEach(s => {
+  s.addEventListener('click', () => setTalkMode(s.dataset.talkmode));
+});
+refreshTalkUI();
 
 function updateVoicePill() {
   const pill = document.getElementById('vchip');

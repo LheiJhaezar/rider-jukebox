@@ -145,6 +145,12 @@
           <div class="meter"><i id="lvl"></i></div>
           <div class="status" id="mstat">Not tested yet.</div>
           <div class="fine" id="mdev"></div>
+          <h2 style="margin-top:18px">Mic mode</h2>
+          <p class="fine">Riding? Pick "Tap on / off" so you don't have to hold the button.</p>
+          <div class="seg" role="group" aria-label="Mic mode">
+          <button type="button" class="segbtn" data-talkmode="hold" aria-pressed="true">Hold to talk</button>
+          <button type="button" class="segbtn" data-talkmode="toggle" aria-pressed="false">Tap on / off</button>
+          </div>
           <button class="btn primary" id="mtest" onclick="toggleMicTest()">Start mic test</button>
           <button class="btn quiet" style="margin-top:10px; min-height:44px;" onclick="copyDiagnosticsHandler(this)">Copy diagnostics</button>
         </div>
@@ -203,6 +209,10 @@
       <button class="btn quiet" id="vdn" onclick="changeVolume(-10)">Music down</button>
       <button class="btn quiet" id="skip2" onclick="voteSkip()">Vote skip</button>
       <button class="btn quiet" id="vup" onclick="changeVolume(10)">Music up</button>
+    </div>
+    <div class="seg rseg" role="group" aria-label="Mic mode">
+    <button type="button" class="segbtn" data-talkmode="hold" aria-pressed="true">Hold to talk</button>
+    <button type="button" class="segbtn" data-talkmode="toggle" aria-pressed="false">Tap on / off</button>
     </div>
     <button class="rtalkbtn" id="rtalk">Hold to talk</button>
     <div class="fine" style="text-align:center" id="rnote">Screen stays on while ride mode is open</div>

@@ -152,3 +152,9 @@ h2{font:600 20px var(--display);letter-spacing:-.02em}
 @media (max-width:360px){.chip span{display:none}.rtitle{font-size:22px}}
 @media (max-height:640px){.title{font-size:15px}.talk{width:80px;height:80px}}
 @media (prefers-reduced-motion:reduce){.bars b,.talk.live::after{animation:none}.bars b{height:12px}}
+
+/* Mic mode switch (hold / tap on-off) */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;border-radius:14px;background:var(--surface);border:1px solid var(--edge)}
+.segbtn{min-height:44px;border-radius:10px;border:0;background:transparent;color:var(--dim);font:700 14px var(--display);cursor:pointer}
+.segbtn[aria-pressed="true"]{background:var(--live);color:var(--live-ink)}
+.rseg .segbtn{min-height:48px}
